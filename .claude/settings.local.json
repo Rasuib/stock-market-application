@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npx next:*)",
+      "Bash(rm \"c:/Users/Prathamesh sharma/Desktop/serious-projects/stock-market project/app/api/news/[ticker]/route.ts\")",
+      "Bash(rmdir \"c:/Users/Prathamesh sharma/Desktop/serious-projects/stock-market project/app/api/news/[ticker]\")",
+      "Bash(npm install:*)",
+      "Bash(npx vitest:*)",
+      "Read(//c/Users/Prathamesh sharma/Desktop/serious-projects/stock-market project/**)",
+      "Bash(done)",
+      "Bash(for f:*)",
+      "Bash(do ls:*)",
+      "Bash(ls app/api/news/[ticker]/route.ts)"
+    ]
+  }
+}
