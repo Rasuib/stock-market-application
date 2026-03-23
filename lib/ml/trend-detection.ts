@@ -2,10 +2,12 @@
  * Trend Detection Module
  *
  * Analyzes price data to determine market trend using:
- * - Simple Moving Averages (SMA)
- * - Price change percentage
+ * - Multi-indicator consensus (RSI, MACD, Bollinger, Stochastic, SMA)
+ * - Falls back to dual-SMA crossover when insufficient data for full analysis
  * - Trend signal: uptrend (+1), neutral (0), downtrend (-1)
  */
+
+import { computeAllIndicators, type IndicatorSnapshot } from "@/lib/indicators"
 
 export interface TrendSignal {
   trend: "uptrend" | "neutral" | "downtrend"
@@ -14,6 +16,8 @@ export interface TrendSignal {
   shortMA: number
   longMA: number
   priceChangePercent: number
+  /** Full indicator snapshot when enough data is available */
+  indicators?: IndicatorSnapshot
 }
 
 export interface PricePoint {
@@ -23,7 +27,6 @@ export interface PricePoint {
 
 /**
  * Calculate Simple Moving Average over n periods.
- * MA = (1/n) * Σ Pi
  */
 function calculateSMA(prices: number[], period: number): number {
   if (prices.length < period) return prices[prices.length - 1] || 0
@@ -33,7 +36,6 @@ function calculateSMA(prices: number[], period: number): number {
 
 /**
  * Calculate price change percentage.
- * ΔP = (Pt - P0) / P0
  */
 function priceChangePercent(current: number, reference: number): number {
   if (reference === 0) return 0
@@ -43,13 +45,9 @@ function priceChangePercent(current: number, reference: number): number {
 /**
  * Detect trend from historical price data.
  *
- * Uses dual moving average crossover:
- * - Short MA (5 periods) vs Long MA (20 periods)
- * - If shortMA > longMA → uptrend
- * - If shortMA < longMA → downtrend
- * - Otherwise → neutral
- *
- * Confidence is based on the divergence between the two MAs.
+ * With 26+ data points, uses multi-indicator consensus (RSI, MACD, Bollinger,
+ * Stochastic, SMA) for a robust signal. Falls back to dual-MA crossover
+ * when data is insufficient for full indicator computation.
  */
 export function detectTrend(priceHistory: PricePoint[], shortPeriod = 5, longPeriod = 20): TrendSignal {
   if (priceHistory.length < 2) {
@@ -64,11 +62,40 @@ export function detectTrend(priceHistory: PricePoint[], shortPeriod = 5, longPer
   const longMA = calculateSMA(prices, longPeriod)
   const changePct = priceChangePercent(currentPrice, firstPrice)
 
-  // MA crossover signal
+  // With enough data, use multi-indicator consensus
+  if (prices.length >= 35) {
+    const snapshot = computeAllIndicators(prices)
+    const { direction, confidence } = snapshot.overallSignal
+
+    let trend: "uptrend" | "neutral" | "downtrend"
+    let signal: 1 | 0 | -1
+
+    if (direction === "bullish") {
+      trend = "uptrend"
+      signal = 1
+    } else if (direction === "bearish") {
+      trend = "downtrend"
+      signal = -1
+    } else {
+      trend = "neutral"
+      signal = 0
+    }
+
+    return {
+      trend,
+      signal,
+      confidence,
+      shortMA: Math.round(shortMA * 100) / 100,
+      longMA: Math.round(longMA * 100) / 100,
+      priceChangePercent: Math.round(changePct * 100) / 100,
+      indicators: snapshot,
+    }
+  }
+
+  // Fallback: dual-MA crossover for limited data
   const maDiff = shortMA - longMA
   const maDiffPercent = longMA > 0 ? (maDiff / longMA) * 100 : 0
 
-  // Combine MA crossover with price momentum
   let signal: 1 | 0 | -1
   let trend: "uptrend" | "neutral" | "downtrend"
 
@@ -83,7 +110,6 @@ export function detectTrend(priceHistory: PricePoint[], shortPeriod = 5, longPer
     trend = "neutral"
   }
 
-  // Confidence: how strong is the MA divergence (0 to 1)
   const confidence = Math.min(1, Math.abs(maDiffPercent) / 5)
 
   return {

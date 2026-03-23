@@ -5,9 +5,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Search, TrendingUp, TrendingDown, History } from "lucide-react"
+import { Search, TrendingUp, TrendingDown, Loader2, AlertCircle, ArrowRight } from "lucide-react"
 import RealTimeStockChart from "./real-time-stock-chart"
-import { useNavigation } from "@/components/dashboard/navigation-context"
+import { fetchJSON } from "@/lib/fetch-client"
+import { useTradingStore } from "@/stores/trading-store"
+import { SearchResultsSkeleton, StockDetailSkeleton } from "./loading-skeletons"
 
 interface StockData {
   symbol: string
@@ -46,34 +48,28 @@ interface SearchResponse {
   error?: string
 }
 
-interface StockSearchPanelProps {
-  onStockSelect?: (stock: { symbol: string; price: number; name: string; market?: string }) => void
-  addToWatchlist?: (stock: {
-    symbol: string
-    name: string
-    price: string
-    change: string
-    isPositive: boolean
-    sector?: string
-    market?: string
-  }) => boolean
-  previousStock?: {
-    symbol: string
-    price: number
-    name: string
-    market?: string
-  } | null
+interface NewsArticle {
+  title?: string
 }
 
-export default function StockSearchPanel({ onStockSelect, addToWatchlist, previousStock }: StockSearchPanelProps) {
+interface NewsApiResponse {
+  articles?: NewsArticle[]
+  overallSentiment?: { label?: "bullish" | "bearish" | "neutral"; score?: number }
+  totalResults?: number
+  error?: boolean
+}
+
+export default function StockSearchPanel() {
+  const storeSelectStock = useTradingStore((s) => s.selectStock)
+  const storeAddToWatchlist = useTradingStore((s) => s.addToWatchlist)
   const [ticker, setTicker] = useState("")
   const [stockData, setStockData] = useState<StockData | null>(null)
   const [newsData, setNewsData] = useState<NewsData | null>(null)
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [showSearchResults, setShowSearchResults] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const { setCurrentView } = useNavigation()
 
   const getMarketFromResult = (result: { symbol: string; currency: string }) => {
     if (result.currency === "INR" || result.symbol.endsWith(".NS") || result.symbol.endsWith(".BO")) {
@@ -83,7 +79,7 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
     return "US"
   }
 
-  const mapNewsResponse = (data: any): NewsData | null => {
+  const mapNewsResponse = (data: NewsApiResponse): NewsData | null => {
     if (!data || !Array.isArray(data.articles)) {
       return null
     }
@@ -93,7 +89,7 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
       sentimentLabel === "bullish" ? "positive" : sentimentLabel === "bearish" ? "negative" : "neutral"
 
     return {
-      headlines: data.articles.map((article: { title?: string }) => article.title || "").filter(Boolean).slice(0, 5),
+      headlines: data.articles.map((article) => article.title || "").filter(Boolean).slice(0, 5),
       sentiment,
       sentimentScore: (data.overallSentiment?.score ?? 50) / 100,
       totalArticles: data.totalResults ?? data.articles.length,
@@ -109,13 +105,9 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
     setStockData(null)
 
     try {
-      const response = await fetch(`/api/stocks/search?q=${encodeURIComponent(ticker)}`)
-
-      if (!response.ok) {
-        throw new Error("Failed to search stocks")
-      }
-
-      const searchData: SearchResponse = await response.json()
+      const searchData = await fetchJSON<SearchResponse>(
+        `/api/stocks/search?q=${encodeURIComponent(ticker)}`,
+      )
 
       if (searchData.error) {
         throw new Error(searchData.error)
@@ -124,10 +116,10 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
       setSearchResults(searchData.results || [])
 
       if (searchData.results.length === 0) {
-        setError("No stocks found for this search term")
+        setError(`No results for "${ticker}". Try a company name or ticker like AAPL or RELIANCE.`)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred")
+      setError(err instanceof Error ? err.message : "Search failed. Please try again.")
       setSearchResults([])
     } finally {
       setLoading(false)
@@ -135,36 +127,30 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
   }
 
   const selectStock = async (result: SearchResult) => {
-    setLoading(true)
+    setDetailLoading(true)
     setShowSearchResults(false)
+    setError(null)
 
     try {
-      const [stockResponse, newsResponse] = await Promise.all([
-        fetch(`/api/stock/${encodeURIComponent(result.symbol)}`),
-        fetch(`/api/news?ticker=${encodeURIComponent(result.symbol)}`),
+      const [stockResult, newsResult] = await Promise.all([
+        fetchJSON<StockData>(`/api/stock/${encodeURIComponent(result.symbol)}`),
+        fetchJSON<NewsApiResponse>(`/api/news?ticker=${encodeURIComponent(result.symbol)}`).catch(() => ({ error: true })),
       ])
-
-      if (!stockResponse.ok) {
-        throw new Error("Failed to fetch detailed stock data")
-      }
-
-      const stockResult: StockData = await stockResponse.json()
-      const newsResult = await newsResponse.json()
       const market = getMarketFromResult(result)
 
       setStockData(stockResult)
       setNewsData(newsResult.error ? null : mapNewsResponse(newsResult))
 
-      onStockSelect?.({
+      storeSelectStock({
         symbol: stockResult.symbol,
         price: stockResult.price,
         name: result.originalQuery || stockResult.symbol,
         market,
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred")
+      setError(err instanceof Error ? err.message : "Could not load stock details. Please try again.")
     } finally {
-      setLoading(false)
+      setDetailLoading(false)
     }
   }
 
@@ -180,20 +166,18 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
       }
 
       setStockData(updatedStockData)
-      onStockSelect?.({
+      storeSelectStock({
         symbol: stockData.symbol,
         price,
         name: stockData.symbol,
         market: stockData.currency === "INR" ? "IN" : "US",
       })
     },
-    [onStockSelect, stockData],
+    [storeSelectStock, stockData],
   )
 
   const handleAddToWatchlist = (result: SearchResult) => {
-    if (!addToWatchlist) return
-
-    const watchlistStock = {
+    storeAddToWatchlist({
       symbol: result.symbol,
       name: result.originalQuery || result.symbol,
       price: `${result.currency === "INR" ? "\u20B9" : "$"}${result.price.toFixed(2)}`,
@@ -201,19 +185,17 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
       isPositive: result.changePercent >= 0,
       sector: "Unknown",
       market: getMarketFromResult(result),
-    }
-
-    addToWatchlist(watchlistStock)
+    })
   }
 
   const getSentimentColor = (sentiment: string) => {
     switch (sentiment) {
       case "positive":
-        return "bg-green-500/20 text-green-400 border-green-500/30"
+        return "bg-profit/20 text-profit border-profit/30"
       case "negative":
-        return "bg-red-500/20 text-red-400 border-red-500/30"
+        return "bg-loss/20 text-loss border-loss/30"
       default:
-        return "bg-gray-500/20 text-gray-400 border-gray-500/30"
+        return "bg-muted text-muted-foreground border-border"
     }
   }
 
@@ -231,20 +213,23 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
 
   return (
     <div className="space-y-6">
-      <Card className="bg-gray-900/50 border-gray-800">
+      <Card>
         <CardHeader>
-          <CardTitle className="text-green-400 flex items-center gap-2">
-            <Search className="w-5 h-5" />
-            Stock Analysis Dashboard
+          <CardTitle className="flex items-center gap-2">
+            <Search className="w-5 h-5 text-primary" />
+            Find a Stock
           </CardTitle>
+          {!stockData && !loading && (
+            <p className="text-sm text-muted-foreground">Search by company name or ticker symbol to get started.</p>
+          )}
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex gap-2">
             <Input
-              placeholder="Enter stock name (e.g., AAPL, TSLA, RELIANCE, TCS)"
+              placeholder="e.g., Apple, TSLA, Reliance"
               value={ticker}
               onChange={(e) => setTicker(e.target.value)}
-              className="bg-gray-800 border-gray-700 text-white"
+              aria-label="Stock ticker search"
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault()
@@ -252,58 +237,67 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
                 }
               }}
             />
-            <Button onClick={handleMultiSearch} disabled={loading} className="bg-green-600 hover:bg-green-700">
-              {loading ? "Searching..." : "Search"}
+            <Button onClick={handleMultiSearch} disabled={loading || !ticker.trim()} className="touch-manipulation max-sm:px-3">
+              {loading ? <><Loader2 className="w-4 h-4 animate-spin mr-1" /> Searching</> : "Search"}
             </Button>
           </div>
 
+          {/* Error with retry */}
           {error && (
-            <div className="p-3 bg-red-500/20 border border-red-500/30 rounded-lg">
-              <p className="text-red-400 text-sm">{error}</p>
+            <div className="flex items-start gap-3 p-3 bg-destructive/10 border border-destructive/30 rounded-lg" role="alert">
+              <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-destructive text-sm">{error}</p>
+              </div>
+              <Button variant="ghost" size="sm" className="text-destructive shrink-0" onClick={handleMultiSearch}>
+                Retry
+              </Button>
             </div>
           )}
 
-          {showSearchResults && searchResults.length > 0 && (
-            <div className="space-y-3">
-              <h4 className="text-lg font-semibold text-white">Search Results:</h4>
+          {loading && showSearchResults && <SearchResultsSkeleton />}
+
+          {showSearchResults && !loading && searchResults.length > 0 && (
+            <div className="space-y-2" role="region" aria-label="Search results">
+              <p className="text-sm text-muted-foreground" aria-live="polite">{searchResults.length} result{searchResults.length !== 1 ? "s" : ""} found</p>
               {searchResults.map((result, index) => (
                 <div
                   key={`${result.symbol}-${index}`}
-                  className="flex items-center justify-between gap-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700 hover:border-gray-600 transition-colors max-md:flex-col"
+                  className="flex items-center justify-between gap-4 p-4 bg-surface rounded-lg border border-surface-border hover:border-primary/30 transition-colors cursor-pointer max-md:flex-col"
+                  onClick={() => selectStock(result)}
+                  onKeyDown={(e) => { if (e.key === "Enter") selectStock(result) }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Select ${result.symbol} at ${result.currency === "INR" ? "₹" : "$"}${result.price.toFixed(2)}`}
                 >
                   <div>
-                    <h5 className="text-lg font-bold text-white">{result.symbol}</h5>
-                    <p className="text-xl font-mono text-green-400">
+                    <h5 className="text-lg font-bold">{result.symbol}</h5>
+                    <p className="text-xl font-mono">
                       {result.currency === "INR" ? "₹" : "$"}
                       {result.price.toFixed(2)}
                     </p>
-                    <p className="text-xs text-gray-400">
-                      {result.exchangeFullName} ({result.exchange}) | {result.marketState}
+                    <p className="text-xs text-muted-foreground">
+                      {result.exchangeFullName} | {result.marketState}
                     </p>
                   </div>
                   <div className="text-right max-md:w-full">
-                    <p className={`text-lg font-semibold ${result.change >= 0 ? "text-green-400" : "text-red-400"}`}>
+                    <p className={`text-lg font-semibold font-mono ${result.change >= 0 ? "text-profit" : "text-loss"}`}>
                       {result.change >= 0 ? "+" : ""}
-                      {result.change.toFixed(2)}
+                      {result.change.toFixed(2)} ({result.changePercent >= 0 ? "+" : ""}{result.changePercent.toFixed(2)}%)
                     </p>
-                    <p className={`text-sm ${result.changePercent >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      ({result.changePercent >= 0 ? "+" : ""}
-                      {result.changePercent.toFixed(2)}%)
-                    </p>
-                    <div className="flex gap-2 mt-2 max-md:justify-end">
-                      <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => selectStock(result)}>
-                        Select & Analyze
+                    <div className="flex gap-2 mt-2 max-md:justify-end max-md:w-full">
+                      <Button size="sm" className="touch-manipulation max-md:flex-1 max-md:h-10" onClick={(e) => { e.stopPropagation(); selectStock(result) }}>
+                        <ArrowRight className="w-3.5 h-3.5 mr-1.5" />
+                        Analyze
                       </Button>
-                      {addToWatchlist && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="border-green-600 text-green-400 hover:bg-green-600 hover:text-white bg-transparent"
-                          onClick={() => handleAddToWatchlist(result)}
-                        >
-                          Add to Watchlist
-                        </Button>
-                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="touch-manipulation max-md:flex-1 max-md:h-10"
+                        onClick={(e) => { e.stopPropagation(); handleAddToWatchlist(result) }}
+                      >
+                        + Watchlist
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -311,60 +305,51 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
             </div>
           )}
 
-          {stockData && !showSearchResults && (
+          {detailLoading && !showSearchResults && <StockDetailSkeleton />}
+
+          {stockData && !detailLoading && !showSearchResults && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between p-4 bg-gray-800/50 rounded-lg">
+              <div className="flex items-center justify-between p-4 bg-surface rounded-lg border border-surface-border">
                 <div>
-                  <h3 className="text-xl font-bold text-white">{stockData.symbol}</h3>
-                  <p className="text-2xl font-mono text-green-400">
+                  <h3 className="text-xl font-bold">{stockData.symbol}</h3>
+                  <p className="text-2xl font-mono">
                     {stockData.currency === "INR" ? "₹" : "$"}
                     {stockData.price.toFixed(2)}
                   </p>
-                  <p className="text-xs text-gray-400">{stockData.exchangeName}</p>
+                  <p className="text-xs text-muted-foreground">{stockData.exchangeName}</p>
                 </div>
                 <div className="text-right">
-                  <p className={`text-lg font-semibold ${stockData.change >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  <p className={`text-lg font-semibold font-mono ${stockData.change >= 0 ? "text-profit" : "text-loss"}`}>
                     {stockData.change >= 0 ? "+" : ""}
                     {stockData.change.toFixed(2)}
                   </p>
-                  <p className={`text-sm ${stockData.changePercent >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  <p className={`text-sm font-mono ${stockData.changePercent >= 0 ? "text-profit" : "text-loss"}`}>
                     ({stockData.changePercent >= 0 ? "+" : ""}
                     {stockData.changePercent.toFixed(2)}%)
                   </p>
-                  <Button
-                    size="sm"
-                    className="mt-2 bg-blue-600 hover:bg-blue-700"
-                    onClick={() => {
-                      onStockSelect?.({
-                        symbol: stockData.symbol,
-                        price: stockData.price,
-                        name: stockData.symbol,
-                        market: stockData.currency === "INR" ? "IN" : "US",
-                      })
-                      setCurrentView("simulator")
-                    }}
-                  >
-                    Trade This Stock
-                  </Button>
+                  <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1 justify-end">
+                    <ArrowRight className="w-3 h-3" />
+                    Use the trade panel to buy or sell
+                  </p>
                 </div>
               </div>
 
               {newsData && (
-                <div className="p-4 bg-gray-800/50 rounded-lg">
+                <div className="p-4 bg-surface rounded-lg border border-surface-border">
                   <div className="flex items-center justify-between mb-3">
-                    <h4 className="text-lg font-semibold text-white">Market Sentiment</h4>
+                    <h4 className="text-sm font-semibold">News Sentiment</h4>
                     <Badge className={getSentimentColor(newsData.sentiment)}>
                       {getSentimentIcon(newsData.sentiment)}
                       {newsData.sentiment.toUpperCase()} ({newsData.sentimentScore.toFixed(2)})
                     </Badge>
                   </div>
 
-                  <div className="space-y-2">
-                    <p className="text-sm text-gray-400 mb-2">Recent News Analysis ({newsData.totalArticles} articles):</p>
+                  <div className="space-y-1.5">
+                    <p className="text-xs text-muted-foreground">Based on {newsData.totalArticles} recent articles:</p>
                     {newsData.headlines.map((headline, index) => (
-                      <div key={`${headline}-${index}`} className="text-sm text-gray-300 p-2 bg-gray-700/30 rounded">
-                        - {headline}
-                      </div>
+                      <p key={`${headline}-${index}`} className="text-sm p-2 bg-surface-elevated rounded">
+                        {headline}
+                      </p>
                     ))}
                   </div>
                 </div>
@@ -372,25 +357,31 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
             </div>
           )}
 
-          <div className="space-y-2">
-            <p className="text-sm text-gray-400">Popular Stocks:</p>
-            <div className="flex flex-wrap gap-2">
-              {["RELIANCE", "TCS", "INFY", "ADANIGREEN", "AAPL", "TSLA", "GOOGL"].map((symbol) => (
-                <Button
-                  key={symbol}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setTicker(symbol)
-                    setTimeout(() => handleMultiSearch(), 100)
-                  }}
-                  className="border-gray-700 text-gray-300 hover:bg-gray-800"
-                >
-                  {symbol}
-                </Button>
-              ))}
+          {/* Search prompt — only show when no stock detail is loaded */}
+          {!stockData && !showSearchResults && !loading && (
+            <div className="py-4 text-center">
+              <p className="text-sm text-muted-foreground">
+                Search for any stock by name or ticker symbol to view signals and start trading.
+              </p>
             </div>
-          </div>
+          )}
+
+          {/* "Search again" when viewing a stock */}
+          {stockData && !showSearchResults && !loading && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setStockData(null)
+                setNewsData(null)
+                setTicker("")
+              }}
+              className="w-full"
+            >
+              <Search className="w-3.5 h-3.5 mr-1.5" />
+              Search for a different stock
+            </Button>
+          )}
         </CardContent>
       </Card>
 
@@ -403,27 +394,6 @@ export default function StockSearchPanel({ onStockSelect, addToWatchlist, previo
           currency={stockData.currency}
           onPriceUpdate={handlePriceUpdate}
         />
-      )}
-
-      {previousStock && stockData && previousStock.symbol !== stockData.symbol && (
-        <Card className="bg-gray-900/50 border-gray-800">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-amber-400 flex items-center gap-2 text-sm">
-              <History className="w-4 h-4" />
-              Previous Stock: {previousStock.symbol}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <RealTimeStockChart
-              symbol={previousStock.symbol}
-              currentPrice={previousStock.price}
-              change={0}
-              changePercent={0}
-              currency={previousStock.market === "IN" ? "INR" : "USD"}
-              onPriceUpdate={() => {}}
-            />
-          </CardContent>
-        </Card>
       )}
     </div>
   )

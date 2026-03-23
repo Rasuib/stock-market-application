@@ -26,7 +26,7 @@ export default function DashboardPageLayout({ children, header, sidebar }: Dashb
           </span>
         )}
       </div>
-      <div className="min-h-full flex-1 flex flex-col gap-8 md:gap-14 px-3 lg:px-6 py-6 md:py-10 ring-2 ring-pop bg-background">
+      <div className="min-h-full flex-1 flex flex-col gap-4 sm:gap-6 lg:gap-8 px-3 lg:px-6 py-4 md:py-8 pb-20 lg:pb-8 ring-2 ring-pop bg-background">
         {children}
         {sidebar ? <div className="pt-2 lg:hidden">{sidebar}</div> : null}
       </div>

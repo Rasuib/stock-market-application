@@ -16,7 +16,7 @@ export default function NotFound() {
         href="/"
         className="px-6 py-3 bg-gradient-to-r from-[#8b5cf6] to-[#d946ef] text-white rounded-lg font-medium hover:opacity-90 transition-opacity"
       >
-        Back to Dashboard
+        Back to Home
       </Link>
     </div>
   )

@@ -19,6 +19,9 @@ interface SwipeableWrapperProps {
   children: React.ReactNode
   onDelete: () => void
 }
+interface WebkitAudioWindow extends Window {
+  webkitAudioContext?: typeof AudioContext
+}
 
 function SwipeableWrapper({ children, onDelete }: SwipeableWrapperProps) {
   const handleDragEnd = (event: Event, info: PanInfo) => {
@@ -71,11 +74,12 @@ export default function MobileNotifications({ notifications, onMarkAsRead, onDel
 
     prevNotificationsRef.current = notifications
 
+    const timeouts = audioTimeoutsRef.current
     return () => {
-      audioTimeoutsRef.current.forEach((timeoutId) => {
+      timeouts.forEach((timeoutId) => {
         clearTimeout(timeoutId)
       })
-      audioTimeoutsRef.current.clear()
+      timeouts.clear()
     }
   }, [notifications])
 
@@ -160,7 +164,10 @@ function playSubtleNotificationSound() {
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
     if (!isMobile) return
 
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+    const audioWindow = window as WebkitAudioWindow
+    const AudioContextCtor = window.AudioContext || audioWindow.webkitAudioContext
+    if (!AudioContextCtor) return
+    const audioContext = new AudioContextCtor()
 
     // Create a very subtle, soft chime sound
     const oscillator = audioContext.createOscillator()
@@ -186,11 +193,11 @@ function playSubtleNotificationSound() {
     setTimeout(() => {
       try {
         audioContext.close()
-      } catch (e) {
+      } catch {
         // Audio context cleanup completed
       }
     }, 500)
-  } catch (error) {
+  } catch {
     // Fallback: gentle vibration on mobile
     if ("vibrate" in navigator) {
       navigator.vibrate([50, 100, 50]) // Subtle vibration pattern

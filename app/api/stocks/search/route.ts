@@ -1,7 +1,53 @@
 import { type NextRequest, NextResponse } from "next/server"
+// Rate limiting handled by middleware
 
-const cache = new Map<string, { data: any; timestamp: number }>()
+interface SearchResult {
+  symbol: string
+  price: number
+  change: number
+  changePercent: number
+  currency: string
+  marketState: string
+  exchangeName: string
+  exchange: string
+  exchangeFullName: string
+  originalQuery: string
+}
+
+interface SearchResponse {
+  query: string
+  results: SearchResult[]
+  timestamp: number
+}
+
+interface StockData {
+  symbol: string
+  price: number
+  change: number
+  changePercent: number
+  currency: string
+  marketState: string
+  exchangeName: string
+}
+
+const cache = new Map<string, { data: SearchResponse; timestamp: number }>()
 const CACHE_DURATION = 300000 // 5 minutes cache
+const MAX_CACHE_SIZE = 100
+
+function pruneCache() {
+  if (cache.size <= MAX_CACHE_SIZE) return
+  const now = Date.now()
+  for (const [key, entry] of cache) {
+    if (now - entry.timestamp > CACHE_DURATION) cache.delete(key)
+  }
+  // If still too large, remove oldest
+  if (cache.size > MAX_CACHE_SIZE) {
+    const entries = [...cache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp)
+    for (let i = 0; i < entries.length - MAX_CACHE_SIZE; i++) {
+      cache.delete(entries[i][0])
+    }
+  }
+}
 
 // Well-known US tickers — never route these to Indian exchanges
 const KNOWN_US_TICKERS = new Set([
@@ -47,7 +93,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(cached.data)
     }
 
-    const results: any[] = []
+    const results: SearchResult[] = []
     const baseQuery = query.toUpperCase().replace(/\.(NS|BO)$/, "")
     const classification = classifyTicker(query)
 
@@ -87,6 +133,7 @@ export async function GET(request: NextRequest) {
     }
 
     cache.set(cacheKey, { data: searchResults, timestamp: now })
+    pruneCache()
     return NextResponse.json(searchResults)
   } catch (error) {
     console.error("Stock Search API Error:", error)
@@ -94,7 +141,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-async function tryIndianExchanges(baseQuery: string, results: any[]) {
+async function tryIndianExchanges(baseQuery: string, results: SearchResult[]) {
   const exchanges = [
     { suffix: ".NS", name: "NSE", fullName: "National Stock Exchange" },
     { suffix: ".BO", name: "BSE", fullName: "Bombay Stock Exchange" },
@@ -114,7 +161,7 @@ async function tryIndianExchanges(baseQuery: string, results: any[]) {
   }
 }
 
-async function tryFetch(ticker: string): Promise<any | null> {
+async function tryFetch(ticker: string): Promise<StockData | null> {
   try {
     return await fetchStockData(ticker)
   } catch {

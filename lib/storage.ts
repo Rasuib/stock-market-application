@@ -12,7 +12,7 @@
  */
 
 import type { TradeWithCoaching } from "./coaching/types"
-import type { Notification } from "@/types/dashboard"
+import type { GamificationState } from "./gamification/types"
 
 // ── Storage Keys ──
 
@@ -21,11 +21,7 @@ const KEYS = {
   positions: "tradia_positions",
   trades: "tradia_trades_v2",       // v2 = TradeWithCoaching format
   legacyTrades: "tradia_trades",    // v1 = old Trade format
-  notifications: "tradia_notifications",
-  rewardHistory: "tradia_reward_history",
-  user: "tradia_user",
-  learningProgress: "tradia_learning_progress",
-  lastSyncTime: "tradia_last_sync",
+  gamification: "tradia_gamification",
 } as const
 
 // ── Position Type ──
@@ -124,16 +120,6 @@ export function saveTrades(trades: TradeWithCoaching[]): void {
   setItem(KEYS.trades, trimmed)
 }
 
-// ── Notifications ──
-
-export function loadNotifications(): Notification[] {
-  return getItem<Notification[]>(KEYS.notifications, [])
-}
-
-export function saveNotifications(notifications: Notification[]): void {
-  setItem(KEYS.notifications, notifications.slice(-50))
-}
-
 // ── Legacy Trade Migration ──
 
 interface LegacyTrade {
@@ -162,100 +148,21 @@ interface LegacyTrade {
   }
 }
 
-// ── Reward History ──
+// ── Gamification ──
 
-export function loadRewardHistory(): number[] {
-  return getItem<number[]>(KEYS.rewardHistory, [])
+const DEFAULT_GAMIFICATION: GamificationState = {
+  xp: 0,
+  achievements: [],
+  streak: { currentStreak: 0, longestStreak: 0, lastTradeDate: null },
+  lastXPGainTimestamp: null,
 }
 
-export function saveRewardHistory(history: number[]): void {
-  setItem(KEYS.rewardHistory, history.slice(-200))
+export function loadGamification(): GamificationState {
+  return getItem<GamificationState>(KEYS.gamification, DEFAULT_GAMIFICATION)
 }
 
-// ── User ID ──
-
-export function getUserId(): string | null {
-  if (typeof window === "undefined") return null
-  try {
-    const raw = localStorage.getItem(KEYS.user)
-    if (!raw) return null
-    const user = JSON.parse(raw)
-    return user?.username || null
-  } catch {
-    return null
-  }
-}
-
-// ── Server Sync ──
-
-const SYNC_DEBOUNCE_MS = 5_000 // sync at most once every 5 seconds
-let syncTimer: ReturnType<typeof setTimeout> | null = null
-
-export function scheduleSyncToServer(): void {
-  if (typeof window === "undefined") return
-  if (syncTimer) clearTimeout(syncTimer)
-  syncTimer = setTimeout(() => syncToServer(), SYNC_DEBOUNCE_MS)
-}
-
-export async function syncToServer(): Promise<boolean> {
-  const userId = getUserId()
-  if (!userId) return false
-
-  try {
-    const data = {
-      trades: loadTrades(),
-      positions: loadPositions(),
-      balance: loadBalance(),
-      behavioralMemory: getItem("tradia_behavioral_memory", null),
-      curriculumProgress: getItem("tradia_curriculum_progress", null),
-      adaptiveWeights: getItem("tradia_adaptive_weights", null),
-      rewardHistory: loadRewardHistory(),
-    }
-
-    const response = await fetch("/api/user-data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, data }),
-    })
-
-    if (response.ok) {
-      setItem(KEYS.lastSyncTime, new Date().toISOString())
-      return true
-    }
-    return false
-  } catch {
-    return false
-  }
-}
-
-export async function syncFromServer(): Promise<boolean> {
-  const userId = getUserId()
-  if (!userId) return false
-
-  try {
-    const response = await fetch(`/api/user-data?userId=${encodeURIComponent(userId)}`)
-    if (!response.ok) return false
-
-    const { data, exists } = await response.json()
-    if (!exists || !data) return false
-
-    // Only restore if localStorage is empty (recovery scenario)
-    const localTrades = loadTrades()
-    if (localTrades.length > 0) return false // local has data, don't overwrite
-
-    // Restore from server
-    if (data.trades?.length > 0) saveTrades(data.trades)
-    if (data.positions && Object.keys(data.positions).length > 0) savePositions(data.positions)
-    if (data.balance) saveBalance(data.balance)
-    if (data.behavioralMemory) setItem("tradia_behavioral_memory", data.behavioralMemory)
-    if (data.curriculumProgress) setItem("tradia_curriculum_progress", data.curriculumProgress)
-    if (data.adaptiveWeights) setItem("tradia_adaptive_weights", data.adaptiveWeights)
-    if (data.rewardHistory?.length > 0) saveRewardHistory(data.rewardHistory)
-
-    return true
-  } catch {
-    return false
-  }
+export function saveGamification(state: GamificationState): void {
+  setItem(KEYS.gamification, state)
 }
 
 // ── Legacy Trade Migration ──

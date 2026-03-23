@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import type { Notification } from "@/types/dashboard"
 
 const STORAGE_KEY = "tradia_notifications"
@@ -17,30 +17,26 @@ interface NotificationContextType {
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined)
 
-export function NotificationProvider({ children }: { children: ReactNode }) {
-  const [notifications, setNotifications] = useState<Notification[]>([])
-  const hydratedRef = useRef(false)
-
-  // Hydrate from localStorage on mount
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        if (Array.isArray(parsed)) {
-          setNotifications(parsed)
-        }
-      }
-    } catch {
-      // Corrupt data — start fresh
+function loadNotifications(): Notification[] {
+  if (typeof window === "undefined") return []
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (Array.isArray(parsed)) return parsed
     }
-    hydratedRef.current = true
-  }, [])
+  } catch {
+    // Corrupt data — start fresh
+  }
+  return []
+}
+
+export function NotificationProvider({ children }: { children: ReactNode }) {
+  const [notifications, setNotifications] = useState<Notification[]>(loadNotifications)
 
   // Persist to localStorage on change
   useEffect(() => {
-    if (typeof window === "undefined" || !hydratedRef.current) return
+    if (typeof window === "undefined") return
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(notifications))
     } catch {

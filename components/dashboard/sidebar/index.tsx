@@ -1,7 +1,6 @@
 "use client"
 
 import { SidebarFooter as UI_SidebarFooter } from "@/components/ui/sidebar"
-import { SidebarMenuBadge as UI_SidebarMenuBadge } from "@/components/ui/sidebar"
 import { SidebarMenuButton as UI_SidebarMenuButton } from "@/components/ui/sidebar"
 import { SidebarMenuItem as UI_SidebarMenuItem } from "@/components/ui/sidebar"
 import { SidebarMenu as UI_SidebarMenu } from "@/components/ui/sidebar"
@@ -18,63 +17,76 @@ import TrendingUpIcon from "@/components/icons/trending-up"
 import BarChartIcon from "@/components/icons/bar-chart"
 import DollarSignIcon from "@/components/icons/dollar-sign"
 import ActivityIcon from "@/components/icons/activity"
-import GearIcon from "@/components/icons/gear"
 import DotsVerticalIcon from "@/components/icons/dots-vertical"
 import { Bullet } from "@/components/ui/bullet"
-import LockIcon from "@/components/icons/lock"
 import Image from "next/image"
 import { useAuth } from "@/contexts/auth-context"
 import { useRouter, usePathname } from "next/navigation"
+import SyncStatusBadge from "@/components/dashboard/sync-status-badge"
 
 const navData = {
   navMain: [
     {
-      title: "Trading Tools",
+      title: "Trading",
       items: [
         {
           title: "Dashboard",
           view: "dashboard",
           icon: BarChartIcon,
-          isActive: false,
         },
         {
           title: "Stock Analysis",
           view: "analysis",
           icon: TrendingUpIcon,
-          isActive: false,
+        },
+        {
+          title: "Simulator",
+          view: "simulator",
+          icon: ActivityIcon,
         },
         {
           title: "Portfolio",
           view: "portfolio",
           icon: DollarSignIcon,
-          isActive: false,
         },
         {
           title: "Market News",
           view: "news",
           icon: ActivityIcon,
-          isActive: false,
         },
         {
-          title: "Trading Simulator",
-          view: "simulator",
+          title: "Trade History",
+          view: "history",
           icon: ActivityIcon,
-          isActive: false,
+        },
+      ],
+    },
+    {
+      title: "Learn",
+      items: [
+        {
+          title: "Learning Paths",
+          view: "learn",
+          icon: TrendingUpIcon,
         },
         {
-          title: "Settings",
-          view: "settings",
-          icon: GearIcon,
-          isActive: false,
-          locked: true,
+          title: "Challenges",
+          view: "challenges",
+          icon: BarChartIcon,
+        },
+        {
+          title: "Progress",
+          view: "progress",
+          icon: TrendingUpIcon,
+        },
+        {
+          title: "Your Stats",
+          view: "leaderboard",
+          icon: DollarSignIcon,
         },
       ],
     },
   ],
-  desktop: {
-    title: "Market Status",
-    status: "online",
-  },
   user: {
     name: "TRADER",
     email: "trader@tradia.com",
@@ -94,11 +106,9 @@ export function DashboardSidebar({ className, ...props }: React.ComponentProps<t
     avatar: user?.avatar || navData.user.avatar,
   }
 
-  const handleNavigation = (view: string, locked?: boolean) => {
-    if (locked) return
-
-    if (pathname !== "/") {
-      router.push("/")
+  const handleNavigation = (view: string) => {
+    if (pathname !== "/dashboard") {
+      router.push("/dashboard")
     }
 
     setCurrentView(view as NavigationView)
@@ -107,7 +117,7 @@ export function DashboardSidebar({ className, ...props }: React.ComponentProps<t
   return (
     <Sidebar {...props} className={cn("py-sides", className)}>
       <UI_SidebarHeader className="rounded-t-lg flex gap-3 flex-row rounded-b-none">
-        <div className="flex gap-3 flex-row cursor-pointer" onClick={() => router.push("/")}>
+        <div className="flex gap-3 flex-row cursor-pointer" role="button" tabIndex={0} onClick={() => router.push("/dashboard")} onKeyDown={(e) => { if (e.key === "Enter") router.push("/dashboard") }}>
           <div className="flex overflow-clip size-12 shrink-0 items-center justify-center rounded bg-sidebar-primary-foreground/10 transition-colors group-hover:bg-sidebar-primary text-sidebar-primary-foreground">
             <TrendingUpIcon className="size-8 group-hover:scale-110 transition-transform text-blue-500" />
           </div>
@@ -128,25 +138,15 @@ export function DashboardSidebar({ className, ...props }: React.ComponentProps<t
             <UI_SidebarGroupContent>
               <UI_SidebarMenu>
                 {group.items.map((item) => (
-                  <UI_SidebarMenuItem
-                    key={item.title}
-                    className={cn(item.locked && "pointer-events-none opacity-50")}
-                    data-disabled={item.locked}
-                  >
+                  <UI_SidebarMenuItem key={item.title}>
                     <UI_SidebarMenuButton
-                      isActive={currentView === item.view && pathname === "/"}
-                      disabled={item.locked}
-                      className={cn("disabled:cursor-not-allowed", item.locked && "pointer-events-none")}
-                      onClick={() => handleNavigation(item.view, item.locked)}
+                      isActive={currentView === item.view && pathname === "/dashboard"}
+                      onClick={() => handleNavigation(item.view)}
+                      aria-current={currentView === item.view && pathname === "/dashboard" ? "page" : undefined}
                     >
                       {React.createElement(item.icon, { className: "size-5" })}
                       <span>{item.title}</span>
                     </UI_SidebarMenuButton>
-                    {item.locked && (
-                      <UI_SidebarMenuBadge>
-                        <LockIcon className="size-5 block" />
-                      </UI_SidebarMenuBadge>
-                    )}
                   </UI_SidebarMenuItem>
                 ))}
               </UI_SidebarMenu>
@@ -156,6 +156,9 @@ export function DashboardSidebar({ className, ...props }: React.ComponentProps<t
       </UI_SidebarContent>
 
       <UI_SidebarFooter className="p-0">
+        <div className="px-3 py-2">
+          <SyncStatusBadge />
+        </div>
         <UI_SidebarGroup>
           <UI_SidebarGroupLabel>
             <Bullet className="mr-2" />
@@ -166,7 +169,11 @@ export function DashboardSidebar({ className, ...props }: React.ComponentProps<t
               <UI_SidebarMenuItem>
                 <div
                   className="flex gap-0.5 w-full group cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${displayUser.name} profile`}
                   onClick={() => (isAuthenticated ? router.push("/profile") : router.push("/login"))}
+                  onKeyDown={(e) => { if (e.key === "Enter") (isAuthenticated ? router.push("/profile") : router.push("/login")) }}
                 >
                   <div className="shrink-0 flex size-14 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground overflow-clip">
                     <Image

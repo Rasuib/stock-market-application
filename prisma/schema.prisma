@@ -1,0 +1,143 @@
+// Prisma schema for Tradia — PostgreSQL (NeonDB)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── NextAuth.js models ───
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  bio           String?
+  passwordHash  String?   // For credentials-based auth
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  // Tradia-specific relations
+  tradingData    TradingData?
+  trades         Trade[]
+  positions      Position[]
+  watchlistItems WatchlistItem[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Tradia domain models ───
+
+model TradingData {
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  balance     Float   @default(100000)
+  positions   String  @default("{}") // JSON-encoded positions map
+  rewardHistory String @default("[]") // JSON-encoded number array
+  behavioralMemory String? // JSON-encoded behavioral memory
+  curriculumProgress String? // JSON-encoded curriculum state
+  adaptiveWeights String? // JSON-encoded adaptive weights
+  gamification String? // JSON-encoded gamification state (xp, achievements, streak)
+  onboardingStatus String @default("not_started") // not_started | step1_search | step2_trade | step3_review | completed | skipped
+  lastSynced  DateTime @default(now())
+  version     Int      @default(0) // Monotonic version for conflict resolution
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Trade {
+  id        String   @id @default(cuid())
+  userId    String
+  symbol    String
+  type      String   // "buy" | "sell"
+  quantity  Int
+  price     Float
+  currency  String   @default("USD")
+  total     Float
+  coaching  String?  // JSON-encoded coaching data
+  execution String?  // JSON-encoded execution metadata (spread, slippage, commission)
+  thesis    String?  // Pre-trade thesis
+  reflection String? // Post-trade reflection
+  profit    Float?   // For sells: realized profit
+  market    String   @default("US") // "US" | "IN"
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([symbol])
+  @@index([userId, profit])
+}
+
+// ─── Normalized positions ───
+
+model Position {
+  id       String @id @default(cuid())
+  userId   String
+  symbol   String
+  quantity Int
+  avgPrice Float
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol])
+  @@index([userId])
+}
+
+// ─── Watchlist ───
+
+model WatchlistItem {
+  id      String   @id @default(cuid())
+  userId  String
+  symbol  String
+  name    String
+  market  String   @default("US") // "US" | "IN"
+  addedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol])
+  @@index([userId])
+}

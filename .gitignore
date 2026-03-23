@@ -16,8 +16,10 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
-.env*
+# env files (keep .env.example)
+.env
+.env.*
+!.env.example
 
 # vercel
 .vercel
@@ -28,3 +30,11 @@ next-env.d.ts
 
 # server-side user data
 /.data/
+
+# prisma
+prisma/dev.db
+prisma/dev.db-journal
+
+# sentry
+.sentryclirc
+.vercel

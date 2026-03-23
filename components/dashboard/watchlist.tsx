@@ -1,25 +1,30 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import TrashIcon from "@/components/icons/trash"
 import PlusIcon from "@/components/icons/plus"
 import TrendingUpIcon from "@/components/icons/trending-up"
 import TrendingDownIcon from "@/components/icons/trending-down"
-
-interface WatchlistStock {
-  symbol: string
-  name: string
-  price: string
-  change: string
-  isPositive: boolean
-  sector?: string
-  market?: string
-}
+import { useTradingStore } from "@/stores/trading-store"
+import { useNotifications } from "@/contexts/notification-context"
+import { fetchJSON } from "@/lib/fetch-client"
+import { RefreshCw, Bell, BellOff } from "lucide-react"
 
 interface SearchResult {
   symbol: string
@@ -30,68 +35,86 @@ interface SearchResult {
   exchange: string
 }
 
-interface WatchlistProps {
-  watchlist?: WatchlistStock[]
-  stocks?: WatchlistStock[]
-  addToWatchlist?: (stock: WatchlistStock) => boolean
-  removeFromWatchlist?: (symbol: string) => void
-  onRemove?: (symbol: string) => void
+interface LivePrice {
+  price: number
+  change: number
+  changePercent: number
+  lastUpdated: number
 }
 
-export default function Watchlist({
-  watchlist: propWatchlist,
-  stocks,
-  addToWatchlist: propAddToWatchlist,
-  removeFromWatchlist: propRemoveFromWatchlist,
-  onRemove,
-}: WatchlistProps) {
-  const [localWatchlist, setLocalWatchlist] = useState<WatchlistStock[]>([
-    {
-      symbol: "RELIANCE",
-      name: "Reliance Industries",
-      price: "₹2,847.50",
-      change: "+2.34%",
-      isPositive: true,
-      sector: "Energy",
-    },
-    {
-      symbol: "TCS",
-      name: "Tata Consultancy Services",
-      price: "₹4,123.80",
-      change: "+1.87%",
-      isPositive: true,
-      sector: "IT Services",
-    },
-  ])
+// Threshold for price alerts (percentage)
+const ALERT_THRESHOLD = 3
+
+export default function Watchlist() {
+  const watchlist = useTradingStore((s) => s.watchlist)
+  const addToWatchlist = useTradingStore((s) => s.addToWatchlist)
+  const removeFromWatchlist = useTradingStore((s) => s.removeFromWatchlist)
+  const { addNotification } = useNotifications()
 
   const [showSearchModal, setShowSearchModal] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
+  const [livePrices, setLivePrices] = useState<Record<string, LivePrice>>({})
+  const [refreshing, setRefreshing] = useState(false)
+  const [alertsEnabled, setAlertsEnabled] = useState(true)
+  const [lastAlertedPrices, setLastAlertedPrices] = useState<Record<string, number>>({})
 
-  const watchlist = propWatchlist || stocks || localWatchlist
+  const refreshPrices = useCallback(async () => {
+    if (watchlist.length === 0) return
+    setRefreshing(true)
 
-  const handleRemoveFromWatchlist = (symbol: string) => {
-    if (propRemoveFromWatchlist || onRemove) {
-      propRemoveFromWatchlist?.(symbol)
-      onRemove?.(symbol)
-    } else {
-      setLocalWatchlist((prev) => prev.filter((stock) => stock.symbol !== symbol))
-    }
-  }
+    const results = await Promise.allSettled(
+      watchlist.map(stock =>
+        fetchJSON<{ price: number; change: number; changePercent: number }>(
+          `/api/stock/${encodeURIComponent(stock.symbol)}`
+        )
+      )
+    )
 
-  const handleAddToWatchlist = (stock: WatchlistStock) => {
-    // Check if stock already exists
-    if (watchlist.some((item) => item.symbol === stock.symbol)) {
-      return false
-    }
-    if (propAddToWatchlist) {
-      return propAddToWatchlist(stock)
-    } else {
-      setLocalWatchlist((prev) => [...prev, stock])
-      return true
-    }
-  }
+    const newPrices: Record<string, LivePrice> = {}
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled" && result.value?.price) {
+        const symbol = watchlist[i].symbol
+        newPrices[symbol] = {
+          price: result.value.price,
+          change: result.value.change || 0,
+          changePercent: result.value.changePercent || 0,
+          lastUpdated: Date.now(),
+        }
+
+        // Check for significant price movements and alert
+        if (alertsEnabled) {
+          const prevPrice = lastAlertedPrices[symbol]
+          const changePercent = Math.abs(result.value.changePercent || 0)
+
+          if (changePercent >= ALERT_THRESHOLD && (!prevPrice || Math.abs(result.value.price - prevPrice) / prevPrice > 0.01)) {
+            const isUp = (result.value.changePercent || 0) >= 0
+            addNotification({
+              title: `${isUp ? "📈" : "📉"} ${symbol} ${isUp ? "Up" : "Down"} ${changePercent.toFixed(1)}%`,
+              message: `${watchlist[i].name} is now at $${result.value.price.toFixed(2)} (${isUp ? "+" : ""}${(result.value.changePercent || 0).toFixed(2)}%)`,
+              timestamp: new Date().toISOString(),
+              type: isUp ? "trade_buy" : "trade_sell",
+              read: false,
+              priority: changePercent >= 5 ? "high" : "medium",
+            })
+            setLastAlertedPrices(prev => ({ ...prev, [symbol]: result.value.price }))
+          }
+        }
+      }
+    })
+
+    setLivePrices(prev => ({ ...prev, ...newPrices }))
+    setRefreshing(false)
+  }, [watchlist, alertsEnabled, lastAlertedPrices, addNotification])
+
+  // Auto-refresh every 2 minutes
+  useEffect(() => {
+    if (watchlist.length === 0) return
+    refreshPrices()
+    const interval = setInterval(refreshPrices, 2 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [refreshPrices, watchlist.length]) // Only re-setup when watchlist size changes
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return
@@ -103,11 +126,9 @@ export default function Watchlist({
         const data = await response.json()
         setSearchResults(data.results || [])
       } else {
-        console.error("Search failed:", response.statusText)
         setSearchResults([])
       }
-    } catch (error) {
-      console.error("Search error:", error)
+    } catch {
       setSearchResults([])
     } finally {
       setIsSearching(false)
@@ -115,16 +136,18 @@ export default function Watchlist({
   }
 
   const handleAddFromSearch = (result: SearchResult) => {
-    const stock: WatchlistStock = {
+    const market = result.symbol.endsWith(".NS") || result.symbol.endsWith(".BO") ? "IN" : "US"
+    const currencySymbol = market === "IN" ? "₹" : "$"
+    const success = addToWatchlist({
       symbol: result.symbol,
       name: result.name,
-      price: `₹${result.price.toFixed(2)}`,
+      price: `${currencySymbol}${result.price.toFixed(2)}`,
       change: `${result.changePercent >= 0 ? "+" : ""}${result.changePercent.toFixed(2)}%`,
       isPositive: result.changePercent >= 0,
-      sector: result.exchange === "NSE" ? "NSE" : "BSE",
-    }
+      sector: result.exchange,
+      market,
+    })
 
-    const success = handleAddToWatchlist(stock)
     if (success) {
       setShowSearchModal(false)
       setSearchQuery("")
@@ -138,9 +161,32 @@ export default function Watchlist({
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg font-semibold">Stock Watchlist</CardTitle>
-            <Badge variant="secondary" className="text-xs">
-              {watchlist.length} stocks
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setAlertsEnabled(!alertsEnabled)}
+                className={cn("size-8 p-0", alertsEnabled ? "text-green-400" : "text-gray-500")}
+                aria-label={alertsEnabled ? "Disable price alerts" : "Enable price alerts"}
+              >
+                {alertsEnabled ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
+              </Button>
+              {watchlist.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={refreshPrices}
+                  disabled={refreshing}
+                  className="size-8 p-0 text-gray-400 hover:text-white"
+                  aria-label="Refresh watchlist prices"
+                >
+                  <RefreshCw className={cn("w-3.5 h-3.5", refreshing && "animate-spin")} />
+                </Button>
+              )}
+              <Badge variant="secondary" className="text-xs">
+                {watchlist.length} stocks
+              </Badge>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -153,49 +199,88 @@ export default function Watchlist({
               <p className="text-xs mt-1">Add stocks from the search panel to track them</p>
             </div>
           ) : (
-            watchlist.map((stock) => (
-              <div
-                key={stock.symbol}
-                className="flex items-center justify-between p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-semibold text-sm">{stock.symbol}</span>
-                    {stock.sector && (
-                      <Badge variant="outline" className="text-xs">
-                        {stock.sector}
-                      </Badge>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground truncate">{stock.name}</p>
-                </div>
+            watchlist.map((stock) => {
+              const live = livePrices[stock.symbol]
+              const displayPrice = live ? `${stock.market === "IN" ? "₹" : "$"}${live.price.toFixed(2)}` : stock.price
+              const displayChange = live ? `${live.changePercent >= 0 ? "+" : ""}${live.changePercent.toFixed(2)}%` : stock.change
+              const isPositive = live ? live.changePercent >= 0 : stock.isPositive
+              const isSignificant = live && Math.abs(live.changePercent) >= ALERT_THRESHOLD
 
-                <div className="flex items-center gap-3">
-                  <div className="text-right">
-                    <p className="font-semibold text-sm">{stock.price}</p>
-                    <div className="flex items-center gap-1">
-                      {stock.isPositive ? (
-                        <TrendingUpIcon className="size-3 text-green-500" />
-                      ) : (
-                        <TrendingDownIcon className="size-3 text-red-500" />
+              return (
+                <div
+                  key={stock.symbol}
+                  className={cn(
+                    "flex items-center justify-between p-3 rounded-lg transition-colors",
+                    isSignificant
+                      ? isPositive ? "bg-green-500/10 hover:bg-green-500/15" : "bg-red-500/10 hover:bg-red-500/15"
+                      : "bg-muted/30 hover:bg-muted/50"
+                  )}
+                >
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-semibold text-sm">{stock.symbol}</span>
+                      {stock.sector && (
+                        <Badge variant="outline" className="text-xs">
+                          {stock.sector}
+                        </Badge>
                       )}
-                      <span className={cn("text-xs font-medium", stock.isPositive ? "text-green-500" : "text-red-500")}>
-                        {stock.change}
-                      </span>
+                      {isSignificant && (
+                        <Badge className={cn("text-[9px]", isPositive ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400")}>
+                          {isPositive ? "HOT" : "DROP"}
+                        </Badge>
+                      )}
                     </div>
+                    <p className="text-xs text-muted-foreground truncate">{stock.name}</p>
                   </div>
 
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleRemoveFromWatchlist(stock.symbol)}
-                    className="size-8 p-0 hover:bg-destructive/10 hover:text-destructive"
-                  >
-                    <TrashIcon className="size-4" />
-                  </Button>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      <p className="font-semibold text-sm">{displayPrice}</p>
+                      <div className="flex items-center gap-1">
+                        {isPositive ? (
+                          <TrendingUpIcon className="size-3 text-green-500" />
+                        ) : (
+                          <TrendingDownIcon className="size-3 text-red-500" />
+                        )}
+                        <span className={cn("text-xs font-medium", isPositive ? "text-green-500" : "text-red-500")}>
+                          {displayChange}
+                        </span>
+                      </div>
+                    </div>
+
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="size-8 p-0 hover:bg-destructive/10 hover:text-destructive"
+                          aria-label={`Remove ${stock.symbol} from watchlist`}
+                        >
+                          <TrashIcon className="size-4" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Remove {stock.symbol} from watchlist?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This will remove {stock.name} ({stock.symbol}) from your watchlist. You can add it back later.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => removeFromWatchlist(stock.symbol)}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          >
+                            Remove
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
                 </div>
-              </div>
-            ))
+              )
+            })
           )}
 
           <div className="pt-2 border-t">
@@ -213,7 +298,26 @@ export default function Watchlist({
       </Card>
 
       {showSearchModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Add stock to watchlist"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setShowSearchModal(false)
+              setSearchQuery("")
+              setSearchResults([])
+            }
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowSearchModal(false)
+              setSearchQuery("")
+              setSearchResults([])
+            }
+          }}
+        >
           <div className="bg-background rounded-lg p-6 w-full max-w-md mx-4 max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Add Stock to Watchlist</h3>
@@ -226,8 +330,9 @@ export default function Watchlist({
                   setSearchResults([])
                 }}
                 className="size-8 p-0"
+                aria-label="Close search"
               >
-                ×
+                x
               </Button>
             </div>
 
@@ -237,8 +342,10 @@ export default function Watchlist({
                   placeholder="Search stocks (e.g., RELIANCE, TCS)"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyPress={(e) => e.key === "Enter" && handleSearch()}
+                  onKeyDown={(e) => e.key === "Enter" && handleSearch()}
                   className="flex-1"
+                  aria-label="Search stocks to add to watchlist"
+                  autoFocus
                 />
                 <Button onClick={handleSearch} disabled={isSearching}>
                   {isSearching ? "..." : "Search"}
@@ -246,11 +353,12 @@ export default function Watchlist({
               </div>
 
               {searchResults.length > 0 && (
-                <div className="space-y-2 max-h-60 overflow-y-auto">
+                <div className="space-y-2 max-h-60 overflow-y-auto" role="list" aria-label="Search results">
                   {searchResults.map((result) => (
                     <div
                       key={`${result.symbol}-${result.exchange}`}
                       className="flex items-center justify-between p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
+                      role="listitem"
                     >
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
@@ -263,7 +371,7 @@ export default function Watchlist({
                       </div>
                       <div className="flex items-center gap-3">
                         <div className="text-right">
-                          <p className="font-semibold text-sm">₹{result.price.toFixed(2)}</p>
+                          <p className="font-semibold text-sm">${result.price.toFixed(2)}</p>
                           <span
                             className={cn(
                               "text-xs font-medium",
@@ -280,6 +388,7 @@ export default function Watchlist({
                           onClick={() => handleAddFromSearch(result)}
                           className="size-8 p-0 hover:bg-primary/10"
                           disabled={watchlist.some((item) => item.symbol === result.symbol)}
+                          aria-label={`Add ${result.symbol} to watchlist`}
                         >
                           <PlusIcon className="size-4" />
                         </Button>

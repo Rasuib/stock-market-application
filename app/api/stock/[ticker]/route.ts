@@ -1,6 +1,19 @@
 import { type NextRequest, NextResponse } from "next/server"
+// Rate limiting handled by middleware
 
-const requestQueue = new Map<string, Promise<any>>()
+interface StockResponse {
+  symbol: string
+  price: number
+  change: number
+  changePercent: number
+  currency: string
+  marketState: string
+  exchangeName: string
+  previousClose: number
+  timestamp: number
+}
+
+const requestQueue = new Map<string, Promise<StockResponse>>()
 
 export async function GET(request: NextRequest, { params }: { params: { ticker: string } }) {
   try {
@@ -51,7 +64,7 @@ export async function GET(request: NextRequest, { params }: { params: { ticker: 
   }
 }
 
-async function fetchStockData(ticker: string) {
+async function fetchStockData(ticker: string): Promise<StockResponse> {
   await new Promise((resolve) => setTimeout(resolve, 300)) // Small delay to avoid rate limiting
 
   const baseQuery = ticker.toUpperCase().replace(/\.(NS|BO)$/, "")

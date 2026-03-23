@@ -1,28 +1,30 @@
 import type React from "react"
-import { Roboto_Mono } from "next/font/google"
 import "./globals.css"
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import localFont from "next/font/local"
-import { SidebarProvider } from "@/components/ui/sidebar"
-import { MobileHeader } from "@/components/dashboard/mobile-header"
-import { DashboardSidebar } from "@/components/dashboard/sidebar"
-import Widget from "@/components/dashboard/widget"
-import DesktopNotifications from "@/components/dashboard/notifications-sidebar"
-import { NavigationProvider } from "@/components/dashboard/navigation-context"
 import { AuthProvider } from "@/contexts/auth-context"
 import { NotificationProvider } from "@/contexts/notification-context"
+import SkipNav from "@/components/skip-nav"
+import SWRProvider from "@/components/swr-provider"
 
-const WIDGET_DATA = {
-  location: "Global Markets",
-  timezone: "IST",
-  temperature: "",
-  weather: "",
-  date: "",
-}
-
-const robotoMono = Roboto_Mono({
+/**
+ * Monospace font: uses system monospace stack with CSS fallback.
+ * No build-time Google Fonts fetch — works in restricted/offline environments.
+ * The CSS variable --font-roboto-mono is kept for backward compatibility.
+ */
+const monoFont = localFont({
+  src: [
+    {
+      path: "../public/fonts/RobotoMono-Variable.woff2",
+      style: "normal",
+    },
+  ],
   variable: "--font-roboto-mono",
-  subsets: ["latin"],
+  display: "swap",
+  fallback: [
+    "ui-monospace", "SFMono-Regular", "Menlo", "Monaco",
+    "Cascadia Code", "Consolas", "Liberation Mono", "Courier New", "monospace",
+  ],
 })
 
 const rebelGrotesk = localFont({
@@ -31,13 +33,53 @@ const rebelGrotesk = localFont({
   display: "swap",
 })
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+}
+
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://tradia.vercel.app"),
   title: {
     template: "%s – Tradia",
     default: "Tradia - Learn Stock Market Trading",
   },
   description:
-    "Learn stock market investing with sentiment analysis, simulated trading, and educational feedback powered by FinBERT.",
+    "Learn stock market investing with sentiment analysis, simulated trading, and AI-powered educational feedback.",
+  keywords: [
+    "stock market simulator",
+    "trading education",
+    "paper trading",
+    "sentiment analysis",
+    "FinBERT",
+    "technical indicators",
+    "learn investing",
+  ],
+  openGraph: {
+    type: "website",
+    title: "Tradia - Learn Stock Market Trading",
+    description: "Practice trading with virtual money. AI-powered coaching, real-time sentiment analysis, and technical indicators.",
+    siteName: "Tradia",
+    images: [
+      {
+        url: "/api/og?title=Tradia&description=Learn+stock+market+trading+with+AI-powered+coaching",
+        width: 1200,
+        height: 630,
+        alt: "Tradia - Learn Stock Market Trading",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Tradia - Learn Stock Market Trading",
+    description: "Practice trading with virtual money. AI-powered coaching and real-time analysis.",
+    images: ["/api/og?title=Tradia&description=Learn+stock+market+trading+with+AI-powered+coaching"],
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
 }
 
 export default function RootLayout({
@@ -50,31 +92,15 @@ export default function RootLayout({
       <head>
         <link rel="preload" href="/fonts/Rebels-Fett.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </head>
-      <body className={`${rebelGrotesk.variable} ${robotoMono.variable} antialiased`}>
-        <AuthProvider>
-          <NotificationProvider>
-            <NavigationProvider>
-              <SidebarProvider>
-                {/* Mobile Header - only visible on mobile */}
-                <MobileHeader />
-
-                {/* Desktop Layout */}
-                <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-gap lg:px-sides">
-                  <div className="hidden lg:block col-span-2 top-0 relative">
-                    <DashboardSidebar />
-                  </div>
-                  <div className="col-span-1 lg:col-span-7">{children}</div>
-                  <div className="col-span-3 hidden lg:block">
-                    <div className="space-y-gap py-sides min-h-screen max-h-screen sticky top-0 overflow-clip">
-                      <Widget widgetData={WIDGET_DATA} />
-                      <DesktopNotifications />
-                    </div>
-                  </div>
-                </div>
-              </SidebarProvider>
-            </NavigationProvider>
-          </NotificationProvider>
-        </AuthProvider>
+      <body className={`${rebelGrotesk.variable} ${monoFont.variable} antialiased`}>
+        <SkipNav />
+        <SWRProvider>
+          <AuthProvider>
+            <NotificationProvider>
+              {children}
+            </NotificationProvider>
+          </AuthProvider>
+        </SWRProvider>
       </body>
     </html>
   )

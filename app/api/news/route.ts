@@ -15,12 +15,18 @@ import { classifySentimentBatch, finbertToSentimentLabel, finbertToScore } from 
  * Query params:
  *   q      - search query (default: "stock market India")
  *   ticker - specific stock ticker for targeted news
+ *   page   - page number for pagination (default: 1)
+ *   limit  - articles per page (default: 10)
  */
 export async function GET(request: NextRequest) {
+  // Rate limiting handled by middleware
+
   try {
     const { searchParams } = new URL(request.url)
     const query = searchParams.get("q") || "stock market India"
     const ticker = searchParams.get("ticker") || ""
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1)
+    const limit = Math.max(1, Math.min(50, parseInt(searchParams.get("limit") || "10", 10) || 10))
 
     // ── Stage 1: Fetch raw articles ──
     let rawArticles: RawArticle[] = []
@@ -67,9 +73,18 @@ export async function GET(request: NextRequest) {
 
     const overallSentiment = calculateOverallSentiment(articles)
 
+    const totalResults = articles.length
+    const totalPages = Math.ceil(totalResults / limit)
+    const startIndex = (page - 1) * limit
+    const paginatedArticles = articles.slice(startIndex, startIndex + limit)
+
     return NextResponse.json({
-      articles,
-      totalResults: articles.length,
+      articles: paginatedArticles,
+      totalResults,
+      page,
+      limit,
+      totalPages,
+      hasMore: page < totalPages,
       query,
       ticker,
       overallSentiment,
@@ -78,26 +93,33 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("News API Error:", error)
     const fallback = getFallbackArticles("")
+    const fallbackArticles = fallback.map((a, i) => ({
+      id: i + 1,
+      title: a.title,
+      summary: a.description,
+      source: a.source,
+      url: a.url,
+      imageUrl: null,
+      publishedAt: a.publishedAt,
+      timestamp: getTimeAgo(new Date(a.publishedAt)),
+      category: categorizeNews(a.title),
+      sentiment: "neutral" as const,
+      sentimentScore: 50,
+      sentimentConfidence: 0.3,
+      sentimentSource: "heuristic-fallback" as const,
+      sentimentScores: { positive: 0.33, negative: 0.33, neutral: 0.34 },
+      impact: "medium" as const,
+      ticker: null,
+    }))
+    const fallbackTotal = fallbackArticles.length
+    const fallbackTotalPages = Math.ceil(fallbackTotal / 10)
     return NextResponse.json({
-      articles: fallback.map((a, i) => ({
-        id: i + 1,
-        title: a.title,
-        summary: a.description,
-        source: a.source,
-        url: a.url,
-        imageUrl: null,
-        publishedAt: a.publishedAt,
-        timestamp: getTimeAgo(new Date(a.publishedAt)),
-        category: categorizeNews(a.title),
-        sentiment: "neutral" as const,
-        sentimentScore: 50,
-        sentimentConfidence: 0.3,
-        sentimentSource: "heuristic-fallback" as const,
-        sentimentScores: { positive: 0.33, negative: 0.33, neutral: 0.34 },
-        impact: "medium" as const,
-        ticker: null,
-      })),
-      totalResults: fallback.length,
+      articles: fallbackArticles.slice(0, 10),
+      totalResults: fallbackTotal,
+      page: 1,
+      limit: 10,
+      totalPages: fallbackTotalPages,
+      hasMore: 1 < fallbackTotalPages,
       query: "stock market",
       isFallback: true,
       sentimentModel: "heuristic-fallback",
@@ -117,6 +139,14 @@ interface RawArticle {
   publishedAt: string
 }
 
+interface YahooNewsItem {
+  title?: string
+  publisher?: string
+  link?: string
+  thumbnail?: { resolutions?: Array<{ url?: string }> }
+  providerPublishTime?: number
+}
+
 // ──── Data Sources ────
 
 async function fetchYahooNews(ticker: string): Promise<RawArticle[]> {
@@ -130,13 +160,13 @@ async function fetchYahooNews(ticker: string): Promise<RawArticle[]> {
     const data = await response.json()
     if (!data.news || data.news.length === 0) return []
 
-    return data.news.map((item: any) => ({
+    return (data.news as YahooNewsItem[]).map((item) => ({
       title: item.title || "Market Update",
       description: item.title || "",
       source: item.publisher || "Yahoo Finance",
       url: item.link || "",
       imageUrl: item.thumbnail?.resolutions?.[0]?.url || null,
-      publishedAt: new Date(item.providerPublishTime * 1000).toISOString(),
+      publishedAt: new Date((item.providerPublishTime || 0) * 1000).toISOString(),
     }))
   } catch {
     return []
@@ -156,7 +186,7 @@ async function fetchGoogleNews(query: string, ticker: string): Promise<RawArticl
     })
     if (!response.ok) return []
     const xml = await response.text()
-    return parseRSSFeed(xml, ticker)
+    return parseRSSFeed(xml)
   } catch {
     return []
   }
@@ -164,7 +194,7 @@ async function fetchGoogleNews(query: string, ticker: string): Promise<RawArticl
 
 // ──── RSS Parsing ────
 
-function parseRSSFeed(xml: string, ticker: string): RawArticle[] {
+function parseRSSFeed(xml: string): RawArticle[] {
   const articles: RawArticle[] = []
   const itemRegex = /<item>([\s\S]*?)<\/item>/g
   const titleRegex = /<title><!\[CDATA\[(.*?)\]\]><\/title>|<title>(.*?)<\/title>/

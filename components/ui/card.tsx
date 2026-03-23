@@ -11,7 +11,7 @@ function Card({ className, variant = "default", size = "md", ...props }: CardPro
     <div
       data-slot="card"
       className={cn(
-        "text-card-foreground flex flex-col rounded-lg border border-border/50 shadow-sm transition-all duration-200 hover:shadow-md hover:border-border gap-12",
+        "text-card-foreground flex flex-col rounded-lg border border-surface-border shadow-sm transition-all duration-200 hover:shadow-md hover:border-border gap-2",
         {
           "bg-pop": variant === "default",
           "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800": variant === "success",

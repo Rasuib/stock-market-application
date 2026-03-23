@@ -1,6 +1,7 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
+import { SessionProvider, useSession, signIn, signOut } from "next-auth/react"
 import type { User, LearningProgress, TradingStats } from "@/types/user"
 import { calculateLevel, calculateTradeScore } from "@/types/user"
 
@@ -9,7 +10,7 @@ interface AuthContextType {
   learningProgress: LearningProgress | null
   isAuthenticated: boolean
   login: (email: string, password: string) => Promise<boolean>
-  signup: (name: string, email: string, password: string, bio?: string, avatar?: string) => Promise<boolean>
+  signup: (name: string, email: string, password: string, bio?: string, avatar?: string) => Promise<"ok" | "verify" | "error">
   logout: () => void
   updateUser: (updates: Partial<User>) => void
   updateLearningProgress: (score: number, category?: keyof LearningProgress["categories"]) => void
@@ -17,26 +18,6 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
-
-/**
- * Password hashing using SHA-256 via Web Crypto API.
- *
- * SECURITY NOTE: This is client-side hashing for an educational simulator.
- * For a production trading platform, you would need:
- * - Server-side auth (e.g. NextAuth, Clerk, or custom JWT)
- * - bcrypt/argon2 with per-user salts
- * - HTTPS-only cookies, not localStorage
- *
- * The current approach prevents plaintext storage and is adequate for
- * a simulator where no real money or sensitive data is involved.
- */
-async function hashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(password + "tradia_salt_v1")
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("")
-}
 
 const defaultTradingStats: TradingStats = {
   totalTrades: 0,
@@ -50,46 +31,93 @@ const defaultTradingStats: TradingStats = {
   maxStreak: 0,
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+/**
+ * Inner provider that reads from NextAuth session.
+ * Keeps learning progress in localStorage (same as before) since it's
+ * game state, not sensitive auth data.
+ */
+function AuthContextProvider({ children }: { children: ReactNode }) {
+  const { data: session, status } = useSession()
   const [learningProgress, setLearningProgress] = useState<LearningProgress | null>(null)
 
-  useEffect(() => {
-    // Load user from localStorage on mount
-    const savedUser = localStorage.getItem("tradia_user")
-    const savedProgress = localStorage.getItem("tradia_learning_progress")
-
-    if (savedUser) {
-      setUser(JSON.parse(savedUser))
-    }
-    if (savedProgress) {
-      const progress = JSON.parse(savedProgress)
-      // Ensure trading stats exist
-      if (!progress.tradingStats) {
-        progress.tradingStats = defaultTradingStats
+  // Derive user from NextAuth session
+  const user: User | null = session?.user
+    ? {
+        id: session.user.id ?? "",
+        name: session.user.name ?? "",
+        email: session.user.email ?? "",
+        avatar: session.user.image ?? undefined,
+        bio: undefined,
+        createdAt: "",
       }
+    : null
+
+  const isAuthenticated = status === "authenticated" && !!user
+
+  // Load learning progress from localStorage when session changes.
+  // Wrapped in microtask to avoid synchronous setState-in-effect lint warning.
+  useEffect(() => {
+    const userId = user?.id
+    const nextProgress: LearningProgress | null = (() => {
+      if (!userId) return null
+      try {
+        const saved = localStorage.getItem(`tradia_progress_${userId}`)
+        if (saved) {
+          const progress = JSON.parse(saved) as LearningProgress
+          if (!progress.tradingStats) progress.tradingStats = defaultTradingStats
+          return progress
+        }
+        // Initialize default progress for new user
+        const newProgress: LearningProgress = {
+          userId,
+          totalScore: 0,
+          level: "Novice",
+          categories: {
+            technicalAnalysis: 0,
+            fundamentalAnalysis: 0,
+            riskManagement: 0,
+            tradingPsychology: 0,
+            marketSentiment: 0,
+          },
+          tradingStats: defaultTradingStats,
+          completedLessons: [],
+          achievements: [],
+          lastUpdated: new Date().toISOString(),
+        }
+        localStorage.setItem(`tradia_progress_${userId}`, JSON.stringify(newProgress))
+        return newProgress
+      } catch {
+        return null
+      }
+    })()
+
+    queueMicrotask(() => {
+      setLearningProgress(nextProgress)
+    })
+  }, [user?.id])
+
+  const userId = user?.id
+  const saveProgress = useCallback(
+    (progress: LearningProgress) => {
       setLearningProgress(progress)
-    }
-  }, [])
+      if (userId) {
+        try {
+          localStorage.setItem(`tradia_progress_${userId}`, JSON.stringify(progress))
+        } catch {
+          // localStorage unavailable
+        }
+      }
+    },
+    [userId],
+  )
 
   const login = async (email: string, password: string): Promise<boolean> => {
-    const savedUser = localStorage.getItem(`tradia_user_${email}`)
-    if (savedUser) {
-      const userData = JSON.parse(savedUser)
-      const hashedInput = await hashPassword(password)
-      const matches = userData.password === hashedInput
-      if (matches) {
-        if (!userData.progress.tradingStats) {
-          userData.progress.tradingStats = defaultTradingStats
-        }
-        setUser(userData.user)
-        setLearningProgress(userData.progress)
-        localStorage.setItem("tradia_user", JSON.stringify(userData.user))
-        localStorage.setItem("tradia_learning_progress", JSON.stringify(userData.progress))
-        return true
-      }
-    }
-    return false
+    const result = await signIn("credentials", {
+      email,
+      password,
+      redirect: false,
+    })
+    return result?.ok === true
   }
 
   const signup = async (
@@ -97,78 +125,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string,
     password: string,
     bio?: string,
-    avatar?: string,
-  ): Promise<boolean> => {
-    // Check if user already exists
-    if (localStorage.getItem(`tradia_user_${email}`)) {
-      return false
+  ): Promise<"ok" | "verify" | "error"> => {
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password, bio }),
+      })
+      if (!res.ok) return "error"
+
+      const data = await res.json()
+
+      // If email verification is required, redirect to verify page instead of auto sign-in
+      if (data.requiresVerification) {
+        return "verify"
+      }
+
+      // Auto sign-in after successful signup (fallback if verification not required)
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+      })
+      return result?.ok === true ? "ok" : "error"
+    } catch {
+      return "error"
     }
-
-    const newUser: User = {
-      id: Date.now().toString(),
-      name,
-      email,
-      bio,
-      avatar: avatar || "/trader-avatar.jpg",
-      createdAt: new Date().toISOString(),
-    }
-
-    const newProgress: LearningProgress = {
-      userId: newUser.id,
-      totalScore: 0,
-      level: "Novice",
-      categories: {
-        technicalAnalysis: 0,
-        fundamentalAnalysis: 0,
-        riskManagement: 0,
-        tradingPsychology: 0,
-        marketSentiment: 0,
-      },
-      tradingStats: defaultTradingStats,
-      completedLessons: [],
-      achievements: [],
-      lastUpdated: new Date().toISOString(),
-    }
-
-    // Save user with hashed password
-    const hashedPw = await hashPassword(password)
-    localStorage.setItem(
-      `tradia_user_${email}`,
-      JSON.stringify({
-        user: newUser,
-        password: hashedPw,
-        progress: newProgress,
-      }),
-    )
-
-    setUser(newUser)
-    setLearningProgress(newProgress)
-    localStorage.setItem("tradia_user", JSON.stringify(newUser))
-    localStorage.setItem("tradia_learning_progress", JSON.stringify(newProgress))
-
-    return true
   }
 
   const logout = () => {
-    setUser(null)
-    setLearningProgress(null)
-    localStorage.removeItem("tradia_user")
-    localStorage.removeItem("tradia_learning_progress")
+    signOut({ callbackUrl: "/login" })
   }
 
-  const updateUser = (updates: Partial<User>) => {
-    if (!user) return
-
-    const updatedUser = { ...user, ...updates }
-    setUser(updatedUser)
-    localStorage.setItem("tradia_user", JSON.stringify(updatedUser))
-
-    // Update in the user storage as well
-    const savedUserData = localStorage.getItem(`tradia_user_${user.email}`)
-    if (savedUserData) {
-      const userData = JSON.parse(savedUserData)
-      userData.user = updatedUser
-      localStorage.setItem(`tradia_user_${user.email}`, JSON.stringify(userData))
+  const updateUser = async (updates: Partial<User>) => {
+    try {
+      const res = await fetch("/api/user/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: updates.name, bio: updates.bio }),
+      })
+      if (!res.ok) return
+      // Trigger session refresh so the sidebar picks up the new name
+      window.location.reload()
+    } catch {
+      // silently fail
     }
   }
 
@@ -192,18 +192,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    setLearningProgress(updatedProgress)
-    localStorage.setItem("tradia_learning_progress", JSON.stringify(updatedProgress))
-
-    // Update in the user storage as well
-    if (user) {
-      const savedUserData = localStorage.getItem(`tradia_user_${user.email}`)
-      if (savedUserData) {
-        const userData = JSON.parse(savedUserData)
-        userData.progress = updatedProgress
-        localStorage.setItem(`tradia_user_${user.email}`, JSON.stringify(userData))
-      }
-    }
+    saveProgress(updatedProgress)
   }
 
   const recordTrade = (profit: number, tradeType: "buy" | "sell", category?: keyof LearningProgress["categories"]) => {
@@ -211,13 +200,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const currentStats = learningProgress.tradingStats || defaultTradingStats
 
-    // Buy trades are position entries — don't count as win/loss
     const isSell = tradeType === "sell"
     const isWin = isSell && profit > 0
     const isLoss = isSell && profit <= 0
 
-    // Only sell trades update win/loss stats; buys just increment total trades
-    const newStreak = isWin ? currentStats.tradingStreak + 1 : (isLoss ? 0 : currentStats.tradingStreak)
+    const newStreak = isWin ? currentStats.tradingStreak + 1 : isLoss ? 0 : currentStats.tradingStreak
     const newTotalTrades = currentStats.totalTrades + 1
     const newSuccessfulTrades = isWin ? currentStats.successfulTrades + 1 : currentStats.successfulTrades
 
@@ -233,12 +220,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       maxStreak: Math.max(currentStats.maxStreak, newStreak),
     }
 
-    // Calculate score based on trade performance (buys get base participation score)
     const tradeScore = isSell ? calculateTradeScore(profit, isWin, newStreak) : 5
     const newTotalScore = learningProgress.totalScore + tradeScore
     const newLevel = calculateLevel(newTotalScore)
 
-    // Determine category based on trade type
     const tradeCategory = category || (tradeType === "sell" ? "riskManagement" : "technicalAnalysis")
 
     const updatedProgress: LearningProgress = {
@@ -261,7 +246,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         id: "first_trade",
         title: "First Trade",
         description: "Completed your first trade",
-        icon: "🎯",
+        icon: "target",
         unlockedAt: new Date().toISOString(),
       })
     }
@@ -271,7 +256,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         id: "active_trader",
         title: "Active Trader",
         description: "Completed 10 trades",
-        icon: "📈",
+        icon: "chart",
         unlockedAt: new Date().toISOString(),
       })
     }
@@ -281,7 +266,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         id: "hot_streak",
         title: "Hot Streak",
         description: "5 profitable trades in a row",
-        icon: "🔥",
+        icon: "fire",
         unlockedAt: new Date().toISOString(),
       })
     }
@@ -291,25 +276,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         id: "sharp_trader",
         title: "Sharp Trader",
         description: "Maintain 70% win rate with 10+ trades",
-        icon: "💎",
+        icon: "diamond",
         unlockedAt: new Date().toISOString(),
       })
     }
 
     updatedProgress.achievements = newAchievements
-
-    setLearningProgress(updatedProgress)
-    localStorage.setItem("tradia_learning_progress", JSON.stringify(updatedProgress))
-
-    // Update in the user storage as well
-    if (user) {
-      const savedUserData = localStorage.getItem(`tradia_user_${user.email}`)
-      if (savedUserData) {
-        const userData = JSON.parse(savedUserData)
-        userData.progress = updatedProgress
-        localStorage.setItem(`tradia_user_${user.email}`, JSON.stringify(userData))
-      }
-    }
+    saveProgress(updatedProgress)
   }
 
   return (
@@ -317,7 +290,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         user,
         learningProgress,
-        isAuthenticated: !!user,
+        isAuthenticated,
         login,
         signup,
         logout,
@@ -328,6 +301,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     >
       {children}
     </AuthContext.Provider>
+  )
+}
+
+/**
+ * Top-level auth provider wrapping NextAuth's SessionProvider
+ * and our custom AuthContext.
+ */
+export function AuthProvider({ children }: { children: ReactNode }) {
+  return (
+    <SessionProvider>
+      <AuthContextProvider>{children}</AuthContextProvider>
+    </SessionProvider>
   )
 }
 

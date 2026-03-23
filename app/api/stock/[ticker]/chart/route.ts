@@ -1,7 +1,48 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { computeAllIndicators, bollingerSeries, rsiSeries, macdSeries, smaSeries, emaSeries } from "@/lib/indicators"
+// Rate limiting handled by middleware
 
-const cache = new Map<string, { data: any; timestamp: number }>()
+interface ChartDataPoint {
+  time: string
+  price: number
+  timestamp: number
+}
+
+interface ChartResponse {
+  success: boolean
+  chartData: ChartDataPoint[]
+  symbol: string
+  range: string
+  dataPoints: number
+  isRealtime?: boolean
+  isSimulated?: boolean
+  indicators?: ReturnType<typeof computeAllIndicators> | null
+  indicatorSeries?: {
+    bollinger: { upper: Array<number | null>; middle: Array<number | null>; lower: Array<number | null> }
+    rsi: Array<number | null>
+    macd: { macd: Array<number | null>; signal: Array<number | null>; histogram: Array<number | null> }
+    sma20: Array<number | null>
+    ema12: Array<number | null>
+  } | null
+}
+
+const cache = new Map<string, { data: ChartResponse; timestamp: number }>()
 const CACHE_DURATION = 5000 // 5 seconds for real-time feel
+const MAX_CACHE_SIZE = 50
+
+function pruneChartCache() {
+  if (cache.size <= MAX_CACHE_SIZE) return
+  const now = Date.now()
+  for (const [key, entry] of cache) {
+    if (now - entry.timestamp > 60000) cache.delete(key) // 1 min stale for charts
+  }
+  if (cache.size > MAX_CACHE_SIZE) {
+    const entries = [...cache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp)
+    for (let i = 0; i < entries.length - MAX_CACHE_SIZE; i++) {
+      cache.delete(entries[i][0])
+    }
+  }
+}
 
 function generateRealtimeDataPoint(basePrice: number): { time: string; price: number; timestamp: number } {
   const now = Date.now()
@@ -133,27 +174,54 @@ export async function GET(request: NextRequest, { params }: { params: { ticker: 
       throw new Error("No chart data available")
     }
 
-    const timestamps = result.timestamp || []
-    const prices = result.indicators?.quote?.[0]?.close || []
+    const timestamps: number[] = result.timestamp || []
+    const prices: Array<number | null> = result.indicators?.quote?.[0]?.close || []
 
     // Format chart data
-    const chartData = timestamps
+    const chartData: ChartDataPoint[] = timestamps
       .map((timestamp: number, index: number) => ({
         time: new Date(timestamp * 1000).toISOString(),
         price: prices[index] || 0,
         timestamp: timestamp * 1000,
       }))
-      .filter((point: any) => point.price > 0)
+      .filter((point: ChartDataPoint) => point.price > 0)
+
+    // Compute technical indicators for non-realtime ranges with sufficient data
+    const closePrices = chartData.map((p) => p.price)
+    let indicators = null
+    let indicatorSeries = null
+
+    if (closePrices.length >= 26) {
+      indicators = computeAllIndicators(closePrices)
+
+      // Compute series data for chart overlays
+      const bbSeries = bollingerSeries(closePrices)
+      const rSeries = rsiSeries(closePrices)
+      const mSeries = macdSeries(closePrices)
+      const sma20Series = smaSeries(closePrices, 20)
+      const ema12Series = emaSeries(closePrices, 12)
+
+      indicatorSeries = {
+        bollinger: { upper: bbSeries.upper, middle: bbSeries.middle, lower: bbSeries.lower },
+        rsi: rSeries,
+        macd: { macd: mSeries.macd, signal: mSeries.signal, histogram: mSeries.histogram },
+        sma20: sma20Series,
+        ema12: ema12Series,
+      }
+    }
 
     const responseData = {
       success: true,
       chartData,
+      indicators,
+      indicatorSeries,
       symbol: ticker,
       range,
       dataPoints: chartData.length,
     }
 
     cache.set(cacheKey, { data: responseData, timestamp: Date.now() })
+    pruneChartCache()
 
     return NextResponse.json(responseData)
   } catch (error) {

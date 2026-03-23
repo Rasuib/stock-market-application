@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react"
 
-export type NavigationView = "dashboard" | "analysis" | "portfolio" | "news" | "simulator" | "settings"
+export type NavigationView = "dashboard" | "analysis" | "portfolio" | "news" | "simulator" | "learn" | "challenges" | "leaderboard" | "progress" | "history" | "settings"
 
 interface NavigationContextType {
   currentView: NavigationView

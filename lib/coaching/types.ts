@@ -202,6 +202,21 @@ export interface TradeWithCoaching {
   profit?: number         // only for sells
   profitPercent?: number  // only for sells
 
+  // Execution realism metadata (present on new trades)
+  execution?: {
+    requestedPrice: number
+    fillPrice: number
+    spreadBps: number
+    commissionPaid: number
+    slippageBps: number
+    executionDelayMs: number
+    orderType: "market" | "limit"
+  }
+
+  // Trade journal
+  thesis?: string         // pre-trade reasoning
+  reflection?: string     // post-trade reflection
+
   // Coaching data (always present)
   coaching: CoachingReport
 }
@@ -288,6 +303,9 @@ export interface EvaluateTradeInput {
   // Outcome (sells only)
   profit?: number
   profitPercent?: number
+  // Journal (optional)
+  thesis?: string
+  reflection?: string
 }
 
 // ── Coaching Feedback Rating ──
