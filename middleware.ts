@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from "next/server"
-import { getToken } from "next-auth/jwt"
+import { NextResponse } from "next/server"
+import { auth } from "@/lib/auth-edge"
 import { checkRateLimit, rateLimitResponse, getClientIP } from "@/lib/rate-limit"
 
 /**
@@ -8,8 +8,9 @@ import { checkRateLimit, rateLimitResponse, getClientIP } from "@/lib/rate-limit
  * 2. Auth protection for dashboard/profile/user API routes
  * 3. Optional email verification gate for dashboard/profile
  *
- * Important: Uses lightweight JWT token check in Edge runtime to keep
- * middleware bundle size below Vercel plan limits.
+ * Uses an Edge-safe NextAuth instance (lib/auth-edge.ts) that shares the
+ * same AUTH_SECRET as the full config, so it can decode JWTs without
+ * importing Prisma or bcrypt.
  */
 
 const RATE_LIMITS: Record<string, { limit: number; windowMs: number }> = {
@@ -41,13 +42,16 @@ function isTruthyEmailVerified(value: unknown): boolean {
   if (typeof value === "string") {
     return value.toLowerCase() === "true" || value.toLowerCase() === "1"
   }
+  if (value instanceof Date) return true
   return false
 }
 
-export default async function middleware(req: NextRequest) {
+// Wrap the NextAuth auth() handler to add rate limiting and custom logic
+export default auth((req) => {
   const pathname = req.nextUrl.pathname
   const isApiRequest = pathname.startsWith("/api/")
 
+  // 1. Rate limiting for API routes
   if (isApiRequest) {
     const ip = getClientIP(req)
     const { key, limit, windowMs } = getRateLimitConfig(pathname)
@@ -55,26 +59,14 @@ export default async function middleware(req: NextRequest) {
     if (!rl.allowed) return rateLimitResponse(rl.resetAt)
   }
 
+  // 2. Auth protection
   const needsAuth = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p))
   if (!needsAuth) return NextResponse.next()
 
-  // NextAuth v5 uses "authjs.session-token" cookie name.
-  // On HTTPS (production), it's prefixed with "__Secure-".
-  // getToken() in some v5 beta versions doesn't auto-detect this correctly
-  // in Edge middleware, so we pass the cookie name explicitly.
-  const secureCookie = req.nextUrl.protocol === "https:"
-  const cookieName = secureCookie
-    ? "__Secure-authjs.session-token"
-    : "authjs.session-token"
+  // req.auth is the decoded session (set by NextAuth's auth() wrapper)
+  const session = req.auth
 
-  const token = await getToken({
-    req,
-    secret: process.env.AUTH_SECRET,
-    cookieName,
-    salt: cookieName,
-  })
-
-  if (!token) {
+  if (!session) {
     if (isApiRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
@@ -83,19 +75,18 @@ export default async function middleware(req: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  // Only enforce email verification if the email service is configured (RESEND_API_KEY).
-  // Without it, users can't receive verification emails, so blocking them is a dead end.
+  // 3. Email verification gate (only when email service is configured)
   const emailServiceConfigured = !!process.env.RESEND_API_KEY
   const needsVerification = VERIFIED_PREFIXES.some((p) => pathname.startsWith(p))
   if (emailServiceConfigured && needsVerification && !isApiRequest) {
-    const emailVerified = isTruthyEmailVerified((token as Record<string, unknown>).emailVerified)
-    if ((token as Record<string, unknown>).emailVerified !== undefined && !emailVerified) {
+    const emailVerified = isTruthyEmailVerified(session.user?.emailVerified)
+    if (session.user?.emailVerified !== undefined && !emailVerified) {
       return NextResponse.redirect(new URL("/verify-email", req.url))
     }
   }
 
   return NextResponse.next()
-}
+})
 
 export const config = {
   matcher: [
