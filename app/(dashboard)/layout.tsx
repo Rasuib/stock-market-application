@@ -1,4 +1,6 @@
 import type React from "react"
+import { redirect } from "next/navigation"
+import { auth } from "@/lib/auth"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { MobileHeader } from "@/components/dashboard/mobile-header"
 import { DashboardSidebar } from "@/components/dashboard/sidebar"
@@ -6,11 +8,17 @@ import { NavigationProvider } from "@/components/dashboard/navigation-context"
 import BottomNav from "@/components/mobile/bottom-nav"
 import DisclaimerBanner from "@/components/disclaimer-banner"
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const session = await auth()
+
+  if (!session) {
+    redirect("/login?callbackUrl=/dashboard")
+  }
+
   return (
     <NavigationProvider>
       <SidebarProvider>
