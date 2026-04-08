@@ -28,11 +28,12 @@ import { RefreshCw, Bell, BellOff } from "lucide-react"
 
 interface SearchResult {
   symbol: string
-  name: string
+  name?: string
   price: number
   change: number
   changePercent: number
   exchange: string
+  currency?: string
 }
 
 interface LivePrice {
@@ -59,6 +60,11 @@ export default function Watchlist() {
   const [refreshing, setRefreshing] = useState(false)
   const [alertsEnabled, setAlertsEnabled] = useState(true)
   const [lastAlertedPrices, setLastAlertedPrices] = useState<Record<string, number>>({})
+
+  const formatPrice = useCallback((price: number, market?: string, currency?: string) => {
+    const symbol = market === "IN" || currency === "INR" ? "\u20B9" : "$"
+    return `${symbol}${price.toFixed(2)}`
+  }, [])
 
   const refreshPrices = useCallback(async () => {
     if (watchlist.length === 0) return
@@ -90,9 +96,10 @@ export default function Watchlist() {
 
           if (changePercent >= ALERT_THRESHOLD && (!prevPrice || Math.abs(result.value.price - prevPrice) / prevPrice > 0.01)) {
             const isUp = (result.value.changePercent || 0) >= 0
+            const market = watchlist[i].market || "US"
             addNotification({
-              title: `${isUp ? "📈" : "📉"} ${symbol} ${isUp ? "Up" : "Down"} ${changePercent.toFixed(1)}%`,
-              message: `${watchlist[i].name} is now at $${result.value.price.toFixed(2)} (${isUp ? "+" : ""}${(result.value.changePercent || 0).toFixed(2)}%)`,
+              title: `${symbol} ${isUp ? "UP" : "DOWN"} ${changePercent.toFixed(1)}%`,
+              message: `${watchlist[i].name} is now at ${formatPrice(result.value.price, market)} (${isUp ? "+" : ""}${(result.value.changePercent || 0).toFixed(2)}%)`,
               timestamp: new Date().toISOString(),
               type: isUp ? "trade_buy" : "trade_sell",
               read: false,
@@ -106,7 +113,7 @@ export default function Watchlist() {
 
     setLivePrices(prev => ({ ...prev, ...newPrices }))
     setRefreshing(false)
-  }, [watchlist, alertsEnabled, lastAlertedPrices, addNotification])
+  }, [watchlist, alertsEnabled, lastAlertedPrices, addNotification, formatPrice])
 
   // Auto-refresh every 2 minutes
   useEffect(() => {
@@ -137,11 +144,11 @@ export default function Watchlist() {
 
   const handleAddFromSearch = (result: SearchResult) => {
     const market = result.symbol.endsWith(".NS") || result.symbol.endsWith(".BO") ? "IN" : "US"
-    const currencySymbol = market === "IN" ? "₹" : "$"
+    const displayName = result.name || result.symbol
     const success = addToWatchlist({
       symbol: result.symbol,
-      name: result.name,
-      price: `${currencySymbol}${result.price.toFixed(2)}`,
+      name: displayName,
+      price: formatPrice(result.price, market, result.currency),
       change: `${result.changePercent >= 0 ? "+" : ""}${result.changePercent.toFixed(2)}%`,
       isPositive: result.changePercent >= 0,
       sector: result.exchange,
@@ -201,7 +208,7 @@ export default function Watchlist() {
           ) : (
             watchlist.map((stock) => {
               const live = livePrices[stock.symbol]
-              const displayPrice = live ? `${stock.market === "IN" ? "₹" : "$"}${live.price.toFixed(2)}` : stock.price
+              const displayPrice = live ? formatPrice(live.price, stock.market) : stock.price
               const displayChange = live ? `${live.changePercent >= 0 ? "+" : ""}${live.changePercent.toFixed(2)}%` : stock.change
               const isPositive = live ? live.changePercent >= 0 : stock.isPositive
               const isSignificant = live && Math.abs(live.changePercent) >= ALERT_THRESHOLD
@@ -230,7 +237,7 @@ export default function Watchlist() {
                         </Badge>
                       )}
                     </div>
-                    <p className="text-xs text-muted-foreground truncate">{stock.name}</p>
+                    <p className="text-xs text-muted-foreground break-words">{stock.name}</p>
                   </div>
 
                   <div className="flex items-center gap-3">
@@ -318,7 +325,7 @@ export default function Watchlist() {
             }
           }}
         >
-          <div className="bg-background rounded-lg p-6 w-full max-w-md mx-4 max-h-[80vh] overflow-y-auto">
+          <div className="bg-background rounded-lg p-6 w-full max-w-xl mx-4 max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Add Stock to Watchlist</h3>
               <Button
@@ -360,18 +367,18 @@ export default function Watchlist() {
                       className="flex items-center justify-between p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
                       role="listitem"
                     >
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="font-semibold text-sm">{result.symbol}</span>
                           <Badge variant="outline" className="text-xs">
                             {result.exchange}
                           </Badge>
                         </div>
-                        <p className="text-xs text-muted-foreground truncate">{result.name}</p>
+                        <p className="text-xs text-muted-foreground break-words">{result.name || result.symbol}</p>
                       </div>
                       <div className="flex items-center gap-3">
                         <div className="text-right">
-                          <p className="font-semibold text-sm">${result.price.toFixed(2)}</p>
+                          <p className="font-semibold text-sm">{formatPrice(result.price, undefined, result.currency)}</p>
                           <span
                             className={cn(
                               "text-xs font-medium",

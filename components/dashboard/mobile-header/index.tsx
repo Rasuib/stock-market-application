@@ -13,7 +13,7 @@ export function MobileHeader() {
   const { notifications, unreadCount, markAsRead, deleteNotification } = useNotifications()
 
   return (
-    <div className="lg:hidden h-header-mobile sticky top-0 z-50 bg-background/95 backdrop-blur-sm border-b border-border">
+    <div className="lg:hidden h-header-mobile sticky top-[var(--disclaimer-height,0px)] z-50 bg-background/95 backdrop-blur-sm border-b border-border">
       <div className="flex items-center justify-between px-4 py-3">
         <SidebarTrigger />
 

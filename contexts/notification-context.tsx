@@ -17,22 +17,22 @@ interface NotificationContextType {
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined)
 
-function loadNotifications(): Notification[] {
-  if (typeof window === "undefined") return []
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) {
-      const parsed = JSON.parse(saved)
-      if (Array.isArray(parsed)) return parsed
-    }
-  } catch {
-    // Corrupt data — start fresh
-  }
-  return []
-}
-
 export function NotificationProvider({ children }: { children: ReactNode }) {
-  const [notifications, setNotifications] = useState<Notification[]>(loadNotifications)
+  const [notifications, setNotifications] = useState<Notification[]>([])
+
+  // Load from localStorage only after mount to avoid SSR hydration mismatch.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      if (!saved) return
+      const parsed = JSON.parse(saved)
+      if (Array.isArray(parsed)) {
+        queueMicrotask(() => setNotifications(parsed))
+      }
+    } catch {
+      // Corrupt data; start fresh
+    }
+  }, [])
 
   // Persist to localStorage on change
   useEffect(() => {

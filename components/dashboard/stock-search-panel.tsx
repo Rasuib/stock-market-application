@@ -30,6 +30,7 @@ interface NewsData {
 
 interface SearchResult {
   symbol: string
+  name: string
   price: number
   change: number
   changePercent: number
@@ -144,7 +145,7 @@ export default function StockSearchPanel() {
       storeSelectStock({
         symbol: stockResult.symbol,
         price: stockResult.price,
-        name: result.originalQuery || stockResult.symbol,
+        name: result.name || result.originalQuery || stockResult.symbol,
         market,
       })
     } catch (err) {
@@ -179,7 +180,7 @@ export default function StockSearchPanel() {
   const handleAddToWatchlist = (result: SearchResult) => {
     storeAddToWatchlist({
       symbol: result.symbol,
-      name: result.originalQuery || result.symbol,
+      name: result.name || result.originalQuery || result.symbol,
       price: `${result.currency === "INR" ? "\u20B9" : "$"}${result.price.toFixed(2)}`,
       change: `${result.changePercent >= 0 ? "+" : ""}${result.changePercent.toFixed(2)}%`,
       isPositive: result.changePercent >= 0,
@@ -270,13 +271,14 @@ export default function StockSearchPanel() {
                   tabIndex={0}
                   aria-label={`Select ${result.symbol} at ${result.currency === "INR" ? "₹" : "$"}${result.price.toFixed(2)}`}
                 >
-                  <div>
+                  <div className="min-w-0">
                     <h5 className="text-lg font-bold">{result.symbol}</h5>
+                    <p className="text-sm text-muted-foreground break-words">{result.name || result.originalQuery}</p>
                     <p className="text-xl font-mono">
                       {result.currency === "INR" ? "₹" : "$"}
                       {result.price.toFixed(2)}
                     </p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs text-muted-foreground break-words">
                       {result.exchangeFullName} | {result.marketState}
                     </p>
                   </div>

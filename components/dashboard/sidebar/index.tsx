@@ -121,9 +121,9 @@ export function DashboardSidebar({ className, ...props }: React.ComponentProps<t
           <div className="flex overflow-clip size-12 shrink-0 items-center justify-center rounded bg-sidebar-primary-foreground/10 transition-colors group-hover:bg-sidebar-primary text-sidebar-primary-foreground">
             <TrendingUpIcon className="size-8 group-hover:scale-110 transition-transform text-blue-500" />
           </div>
-          <div className="grid flex-1 text-left text-sm leading-tight">
-            <span className="text-2xl font-display text-blue-400">Tradia</span>
-            <span className="text-xs uppercase text-muted-foreground">Stock Market Learning Platform</span>
+          <div className="grid min-w-0 flex-1 text-left leading-tight">
+            <span className="text-xl font-display text-blue-400 xl:text-2xl">Tradia</span>
+            <span className="text-[10px] uppercase text-muted-foreground/90 xl:text-xs">Stock Market Learning Platform</span>
           </div>
         </div>
       </UI_SidebarHeader>

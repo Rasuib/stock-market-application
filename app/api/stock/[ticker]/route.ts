@@ -21,7 +21,7 @@ export async function GET(request: NextRequest, { params }: { params: { ticker: 
 
     if (ticker === "search") {
       return NextResponse.json(
-        { error: "Invalid ticker. Use /api/stock/search for search functionality." },
+        { error: "Invalid ticker. Use /api/stocks/search for search functionality." },
         { status: 400 },
       )
     }

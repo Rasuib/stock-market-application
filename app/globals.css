@@ -125,6 +125,7 @@
   --gap: 2rem;
   --sides: 1rem;
   --header-mobile: 3.8rem;
+  --disclaimer-height: 0px;
 }
 
 .dark {

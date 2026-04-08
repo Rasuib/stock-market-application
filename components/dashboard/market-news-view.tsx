@@ -204,7 +204,7 @@ export default function MarketNewsView() {
                 className="pl-10 bg-surface border-border text-foreground"
               />
             </div>
-            <Button type="submit" className="bg-purple-600 hover:bg-purple-700">
+            <Button type="submit" className="bg-primary hover:bg-primary/90">
               Search
             </Button>
           </form>
@@ -321,7 +321,7 @@ export default function MarketNewsView() {
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1">
-                      <CardTitle className="text-base sm:text-lg text-foreground leading-tight mb-2 line-clamp-3 sm:line-clamp-2">
+                      <CardTitle className="text-base sm:text-lg text-foreground leading-tight mb-2 break-words">
                         {article.title}
                       </CardTitle>
                       <div className="flex items-center gap-2 mb-2 flex-wrap">
@@ -341,7 +341,7 @@ export default function MarketNewsView() {
                   </div>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  <p className="text-foreground/80 text-sm leading-relaxed mb-3 line-clamp-4 sm:line-clamp-3">{article.summary}</p>
+                  <p className="text-foreground/80 text-sm leading-relaxed mb-3 break-words">{article.summary}</p>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <Clock className="w-3 h-3" />

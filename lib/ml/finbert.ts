@@ -13,7 +13,7 @@
  */
 
 const FINBERT_MODEL = "ProsusAI/finbert"
-const HF_INFERENCE_URL = `https://api-inference.huggingface.co/models/${FINBERT_MODEL}`
+const HF_INFERENCE_URL = `https://router.huggingface.co/hf-inference/models/${FINBERT_MODEL}`
 
 // Timeout for HF API calls (model may need cold-start)
 const INFERENCE_TIMEOUT_MS = 15_000

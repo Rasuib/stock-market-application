@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import DashboardStat from "@/components/dashboard/stat"
 import Watchlist from "@/components/dashboard/watchlist"
 import RiskAnalyticsCard from "@/components/dashboard/risk-analytics-card"
@@ -8,10 +8,32 @@ import TrendingUpIcon from "@/components/icons/trending-up"
 import DollarSignIcon from "@/components/icons/dollar-sign"
 import BarChartIcon from "@/components/icons/bar-chart"
 import ActivityIcon from "@/components/icons/activity"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { useTradingStore } from "@/stores/trading-store"
 import { useTradingStats } from "@/hooks/use-trading-stats"
 import AISessionInsights from "@/components/dashboard/ai-session-insights"
 import AccountResetButton from "@/components/dashboard/account-reset-button"
+import { evaluateTradeForCoaching, type TradeWithCoaching } from "@/lib/coaching"
+import type { EvaluateTradeInput } from "@/lib/coaching/types"
+import { executeOrder, getDefaultConfig } from "@/lib/execution/engine"
+import type { OrderRequest } from "@/lib/execution/types"
+import { getMarketSession } from "@/lib/market-hours"
+import { useNotifications } from "@/contexts/notification-context"
+import { useAuth } from "@/contexts/auth-context"
+import { useGamification } from "@/hooks/use-gamification"
 
 const iconMap = {
   "dollar-sign": DollarSignIcon,
@@ -25,11 +47,21 @@ const COLORS = ["oklch(0.75 0.18 155)", "oklch(0.72 0.15 220)", "oklch(0.65 0.2 
 export default function PortfolioView() {
   const positions = useTradingStore((s) => s.positions)
   const balance = useTradingStore((s) => s.balance)
+  const trades = useTradingStore((s) => s.trades)
+  const setBalance = useTradingStore((s) => s.setBalance)
+  const setPositions = useTradingStore((s) => s.setPositions)
+  const setTrades = useTradingStore((s) => s.setTrades)
+  const { addNotification } = useNotifications()
+  const { isAuthenticated, recordTrade } = useAuth()
+  const { processTrade: processGamification } = useGamification()
   const tradingStats = useTradingStats()
+  const [sellQuantity, setSellQuantity] = useState<Record<string, number>>({})
+  const [sellingSymbol, setSellingSymbol] = useState<string | null>(null)
 
   const [allocation, setAllocation] = useState<
     { symbol: string; value: number; percentage: number; color: string; currentPrice: number }[]
   >([])
+  const [currentPrices, setCurrentPrices] = useState<Record<string, number>>({})
   const [totalPortfolioValue, setTotalPortfolioValue] = useState(balance)
   const [isLoading, setIsLoading] = useState(true)
   const [performance, setPerformance] = useState({
@@ -60,6 +92,7 @@ export default function PortfolioView() {
         avgPrice: number
       }[] = []
       let totalStockValue = 0
+      const latestPrices: Record<string, number> = {}
 
       const activePositions = positionEntries
         .filter(([, pos]) => pos.quantity > 0)
@@ -73,6 +106,7 @@ export default function PortfolioView() {
       activePositions.forEach(([symbol, pos], index) => {
         const result = priceResults[index]
         const currentPrice = result.status === "fulfilled" ? (result.value.price || pos.avgPrice) : pos.avgPrice
+        latestPrices[symbol] = currentPrice
         const value = pos.quantity * currentPrice
 
         allocationData.push({
@@ -95,6 +129,7 @@ export default function PortfolioView() {
       }))
 
       setAllocation(updatedAllocation)
+      setCurrentPrices(latestPrices)
 
       let totalInvested = 0
       let currentValue = 0
@@ -141,6 +176,179 @@ export default function PortfolioView() {
 
   const cashPercentage = totalPortfolioValue > 0 ? (balance / totalPortfolioValue) * 100 : 100
   const hasPositions = allocation.length > 0
+  const openPositions = useMemo(
+    () =>
+      Object.entries(positions)
+        .filter(([, pos]) => pos.quantity > 0)
+        .map(([symbol, pos]) => {
+          const currentPrice = currentPrices[symbol] ?? pos.avgPrice
+          const value = pos.quantity * currentPrice
+          const unrealized = (currentPrice - pos.avgPrice) * pos.quantity
+          const unrealizedPct = pos.avgPrice > 0 ? ((currentPrice - pos.avgPrice) / pos.avgPrice) * 100 : 0
+          return { symbol, pos, currentPrice, value, unrealized, unrealizedPct }
+        }),
+    [positions, currentPrices],
+  )
+
+  const getMarketMeta = (symbol: string) => {
+    const market: "US" | "IN" = symbol.endsWith(".NS") || symbol.endsWith(".BO") ? "IN" : "US"
+    const currency: "USD" | "INR" = market === "IN" ? "INR" : "USD"
+    const currencySymbol = currency === "INR" ? "\u20B9" : "$"
+    return { market, currency, currencySymbol }
+  }
+
+  const getSellQuantity = (symbol: string, maxQty: number) => {
+    const raw = sellQuantity[symbol]
+    if (!raw || Number.isNaN(raw)) return 1
+    return Math.max(1, Math.min(maxQty, Math.floor(raw)))
+  }
+
+  const buildSellInput = (
+    symbol: string,
+    quantity: number,
+    price: number,
+    market: "US" | "IN",
+    currency: "USD" | "INR",
+    profit: number,
+    profitPercent: number,
+    referenceTime: number,
+  ): EvaluateTradeInput => ({
+    action: "sell",
+    symbol,
+    quantity,
+    price,
+    market,
+    currency,
+    sentiment: { label: "neutral", score: 50, confidence: 0.3, source: "unavailable" },
+    trend: { label: "uncertain", signal: 0, confidence: 0.2, shortMA: 0, longMA: 0, momentum: 0 },
+    portfolioExposure: totalPortfolioValue > 0 ? (totalPortfolioValue - balance) / totalPortfolioValue : 0,
+    recentTradeCount: trades.filter(t => referenceTime - new Date(t.timestamp).getTime() < 3_600_000).length,
+    existingPositionSize: positions[symbol]?.quantity ?? 0,
+    totalBalance: balance,
+    recentRewards: trades.slice(-20).map(t => t.coaching.reward.total),
+    tradeHistory: trades.slice(-20),
+    profit,
+    profitPercent,
+  })
+
+  const handleSellFromPortfolio = (symbol: string) => {
+    const position = positions[symbol]
+    if (!position || position.quantity <= 0) return
+
+    const quantity = getSellQuantity(symbol, position.quantity)
+    const marketMeta = getMarketMeta(symbol)
+    const marketSession = getMarketSession(marketMeta.market)
+    const marketPrice = currentPrices[symbol] ?? position.avgPrice
+
+    const request: OrderRequest = {
+      type: "market",
+      action: "sell",
+      symbol,
+      quantity,
+      marketPrice,
+      currency: marketMeta.currency,
+      market: marketMeta.market,
+    }
+
+    const config = getDefaultConfig()
+    const adjustedConfig = {
+      ...config,
+      spreadBps: {
+        liquid: config.spreadBps.liquid * marketSession.spreadMultiplier,
+        mid: config.spreadBps.mid * marketSession.spreadMultiplier,
+        small: config.spreadBps.small * marketSession.spreadMultiplier,
+      },
+    }
+
+    setSellingSymbol(symbol)
+    const result = executeOrder(request, adjustedConfig)
+
+    if (result.status === "rejected") {
+      addNotification({
+        title: "Order Rejected",
+        message: result.rejectReason || "Could not execute sell order.",
+        timestamp: new Date().toISOString(),
+        type: "error",
+        read: false,
+        priority: "high",
+      })
+      setSellingSymbol(null)
+      return
+    }
+
+    const proceeds = quantity * result.fillPrice - result.commissionPaid
+    const newBalance = balance + proceeds
+    const remaining = position.quantity - quantity
+    const profit = (result.fillPrice - position.avgPrice) * quantity - result.commissionPaid
+    const profitPercent = position.avgPrice > 0
+      ? ((result.fillPrice - position.avgPrice) / position.avgPrice) * 100
+      : 0
+    const now = new Date()
+    const nowIso = now.toISOString()
+
+    setBalance(newBalance)
+    setPositions(prev => ({
+      ...prev,
+      [symbol]: {
+        quantity: remaining,
+        avgPrice: remaining > 0 ? position.avgPrice : 0,
+      },
+    }))
+
+    const coaching = evaluateTradeForCoaching(
+      buildSellInput(
+        symbol,
+        quantity,
+        result.fillPrice,
+        marketMeta.market,
+        marketMeta.currency,
+        profit,
+        profitPercent,
+        now.getTime(),
+      ),
+    )
+
+    const trade: TradeWithCoaching = {
+      id: `${nowIso}-${symbol}-sell-portfolio`,
+      type: "sell",
+      symbol,
+      quantity,
+      price: result.fillPrice,
+      cost: quantity * result.fillPrice,
+      timestamp: nowIso,
+      displayTime: now.toLocaleTimeString(),
+      market: marketMeta.market,
+      currency: marketMeta.currency,
+      profit,
+      profitPercent,
+      execution: {
+        requestedPrice: result.requestedPrice,
+        fillPrice: result.fillPrice,
+        spreadBps: result.spreadBps,
+        commissionPaid: result.commissionPaid,
+        slippageBps: result.slippageBps,
+        executionDelayMs: result.executionDelayMs,
+        orderType: result.orderType,
+      },
+      coaching,
+    }
+
+    setTrades(prev => [...prev, trade])
+    processGamification()
+    if (isAuthenticated) recordTrade(profit, "sell", "riskManagement")
+
+    addNotification({
+      title: `Sold ${quantity} ${symbol}`,
+      message: `${profit >= 0 ? "+" : "-"}${marketMeta.currencySymbol}${Math.abs(profit).toFixed(2)} after fees`,
+      timestamp: nowIso,
+      type: "trade_sell",
+      read: false,
+      priority: "medium",
+    })
+
+    setSellQuantity(prev => ({ ...prev, [symbol]: 1 }))
+    setSellingSymbol(null)
+  }
 
   return (
     <>
@@ -307,6 +515,109 @@ export default function PortfolioView() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="mb-6 bg-surface border border-surface-border rounded-lg p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm text-muted-foreground font-mono uppercase">Open Positions</h3>
+          <Badge variant="secondary" className="text-xs">{openPositions.length} holdings</Badge>
+        </div>
+
+        {openPositions.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4">No open positions yet. Buy from the trade panel and they will appear here.</p>
+        ) : (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+            {openPositions.map(({ symbol, pos, currentPrice, value, unrealized, unrealizedPct }) => {
+              const { currencySymbol } = getMarketMeta(symbol)
+              const qty = getSellQuantity(symbol, pos.quantity)
+              const remainingAfterSell = pos.quantity - qty
+              const isSelling = sellingSymbol === symbol
+
+              return (
+                <div key={symbol} className="rounded-lg border border-surface-border bg-surface-elevated p-3 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm break-words">{symbol}</p>
+                      <p className="text-xs text-muted-foreground">Qty {pos.quantity} • Avg {currencySymbol}{pos.avgPrice.toFixed(2)}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-mono">{currencySymbol}{value.toFixed(2)}</p>
+                      <p className={`text-xs font-mono ${unrealized >= 0 ? "text-profit" : "text-loss"}`}>
+                        {unrealized >= 0 ? "+" : "-"}{currencySymbol}{Math.abs(unrealized).toFixed(2)} ({unrealizedPct >= 0 ? "+" : ""}{unrealizedPct.toFixed(2)}%)
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                    <div className="rounded border border-surface-border px-2 py-1.5">
+                      <span className="block text-muted-foreground/70">Current</span>
+                      <span className="font-mono text-foreground">{currencySymbol}{currentPrice.toFixed(2)}</span>
+                    </div>
+                    <div className="rounded border border-surface-border px-2 py-1.5">
+                      <span className="block text-muted-foreground/70">After sell</span>
+                      <span className="font-mono text-foreground">{remainingAfterSell} shares</span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="min-w-24 flex-1">
+                      <label htmlFor={`sell-qty-${symbol}`} className="block text-[11px] text-muted-foreground mb-1">Sell Qty</label>
+                      <Input
+                        id={`sell-qty-${symbol}`}
+                        type="number"
+                        min={1}
+                        max={pos.quantity}
+                        value={qty}
+                        onChange={(e) => {
+                          const raw = Number.parseInt(e.target.value, 10)
+                          setSellQuantity(prev => ({
+                            ...prev,
+                            [symbol]: Number.isNaN(raw) ? 1 : raw,
+                          }))
+                        }}
+                      />
+                    </div>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSellQuantity(prev => ({ ...prev, [symbol]: pos.quantity }))}
+                      className="h-9"
+                    >
+                      Sell All
+                    </Button>
+
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button type="button" size="sm" className="h-9 bg-loss hover:bg-loss/90 text-white" disabled={isSelling}>
+                          {isSelling ? "Selling..." : "Sell"}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Confirm sell order</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Sell {qty} share{qty > 1 ? "s" : ""} of {symbol} at market price (~{currencySymbol}{currentPrice.toFixed(2)}).
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => handleSellFromPortfolio(symbol)}
+                            className="bg-loss text-white hover:bg-loss/90"
+                          >
+                            Confirm Sell
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       <div className="mb-6">

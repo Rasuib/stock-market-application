@@ -3,6 +3,7 @@ import { type NextRequest, NextResponse } from "next/server"
 
 interface SearchResult {
   symbol: string
+  name: string
   price: number
   change: number
   changePercent: number
@@ -22,6 +23,7 @@ interface SearchResponse {
 
 interface StockData {
   symbol: string
+  name: string
   price: number
   change: number
   changePercent: number
@@ -202,6 +204,7 @@ async function fetchStockData(ticker: string) {
 
   return {
     symbol: ticker.toUpperCase(),
+    name: meta.longName || meta.shortName || ticker.toUpperCase(),
     price: currentPrice,
     change,
     changePercent,
