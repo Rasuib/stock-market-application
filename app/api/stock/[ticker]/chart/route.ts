@@ -1,6 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { computeAllIndicators, bollingerSeries, rsiSeries, macdSeries, smaSeries, emaSeries } from "@/lib/indicators"
+import { isMarketActivelyTrading, marketStateLabel } from "@/lib/market-state"
 // Rate limiting handled by middleware
+
+export const dynamic = "force-dynamic"
+export const revalidate = 0
 
 interface ChartDataPoint {
   time: string
@@ -16,6 +20,10 @@ interface ChartResponse {
   dataPoints: number
   isRealtime?: boolean
   isSimulated?: boolean
+  marketState?: string
+  marketStatusLabel?: string
+  isMarketOpen?: boolean
+  isStale?: boolean
   indicators?: ReturnType<typeof computeAllIndicators> | null
   indicatorSeries?: {
     bollinger: { upper: Array<number | null>; middle: Array<number | null>; lower: Array<number | null> }
@@ -27,34 +35,20 @@ interface ChartResponse {
 }
 
 const cache = new Map<string, { data: ChartResponse; timestamp: number }>()
-const CACHE_DURATION = 5000 // 5 seconds for real-time feel
+const CACHE_DURATION = 5000
 const MAX_CACHE_SIZE = 50
 
 function pruneChartCache() {
   if (cache.size <= MAX_CACHE_SIZE) return
   const now = Date.now()
   for (const [key, entry] of cache) {
-    if (now - entry.timestamp > 60000) cache.delete(key) // 1 min stale for charts
+    if (now - entry.timestamp > 60000) cache.delete(key)
   }
   if (cache.size > MAX_CACHE_SIZE) {
     const entries = [...cache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp)
     for (let i = 0; i < entries.length - MAX_CACHE_SIZE; i++) {
       cache.delete(entries[i][0])
     }
-  }
-}
-
-function generateRealtimeDataPoint(basePrice: number): { time: string; price: number; timestamp: number } {
-  const now = Date.now()
-  // Simulate small price fluctuations (±0.3%)
-  const volatility = 0.003
-  const randomChange = (Math.random() - 0.5) * 2 * volatility * basePrice
-  const newPrice = Math.max(basePrice + randomChange, 0.01)
-
-  return {
-    time: new Date(now).toISOString(),
-    price: Math.round(newPrice * 100) / 100,
-    timestamp: now,
   }
 }
 
@@ -67,28 +61,12 @@ export async function GET(request: NextRequest, { params }: { params: { ticker: 
     const cacheKey = `${ticker}-${range}`
     const cached = cache.get(cacheKey)
 
-    if (range === "3S") {
-      if (cached && cached.data.chartData && cached.data.chartData.length > 0) {
-        const lastPrice = cached.data.chartData[cached.data.chartData.length - 1]?.price || 100
-        const newDataPoint = generateRealtimeDataPoint(lastPrice)
-
-        return NextResponse.json({
-          success: true,
-          chartData: [newDataPoint],
-          symbol: ticker,
-          range,
-          dataPoints: 1,
-          isRealtime: true,
-        })
-      }
-      // If no cache, fetch initial data
-    } else if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    if (range !== "3S" && cached && Date.now() - cached.timestamp < CACHE_DURATION) {
       return NextResponse.json(cached.data)
     }
 
-    // Map time ranges to periods and intervals
     const rangeMap: Record<string, { period: string; interval: string }> = {
-      "3S": { period: "1d", interval: "1m" }, // Add 3S mapping for real-time
+      "3S": { period: "1d", interval: "1m" },
       "1D": { period: "1d", interval: "5m" },
       "5D": { period: "5d", interval: "15m" },
       "1M": { period: "1mo", interval: "1h" },
@@ -98,62 +76,27 @@ export async function GET(request: NextRequest, { params }: { params: { ticker: 
     }
 
     const { period, interval } = rangeMap[range] || rangeMap["1D"]
-
-    // Fetch historical data from Yahoo Finance
     const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?period1=0&period2=9999999999&interval=${interval}&range=${period}`
 
     const response = await fetch(yahooUrl, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       },
+      cache: "no-store",
     })
 
     if (!response.ok) {
-      if (response.status === 429) {
-        if (cached && cached.data.chartData && cached.data.chartData.length > 0) {
-          const lastPrice = cached.data.chartData[cached.data.chartData.length - 1]?.price || 100
-          const newDataPoint = generateRealtimeDataPoint(lastPrice)
-          return NextResponse.json({
-            success: true,
-            chartData: [newDataPoint],
-            symbol: ticker,
-            range,
-            dataPoints: 1,
-            isRealtime: true,
-            isSimulated: true,
-          })
-        }
-        return NextResponse.json(
-          {
-            error: "Rate limit exceeded",
-            details: "Too many requests to Yahoo Finance API. Please try again later.",
-            retryAfter: 60,
-          },
-          { status: 429 },
-        )
+      if (cached?.data?.chartData?.length) {
+        return NextResponse.json({
+          ...cached.data,
+          isRealtime: false,
+          isSimulated: false,
+          isStale: true,
+          marketStatusLabel: `${cached.data.marketStatusLabel || "Latest chart"} - temporarily delayed`,
+        })
       }
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
 
-    const contentType = response.headers.get("content-type")
-    if (!contentType || !contentType.includes("application/json")) {
-      const textResponse = await response.text()
-      console.error("Non-JSON response:", textResponse.substring(0, 100))
-
-      if (textResponse.includes("Too Many Requests") || textResponse.includes("rate limit")) {
-        if (cached && cached.data.chartData && cached.data.chartData.length > 0) {
-          const lastPrice = cached.data.chartData[cached.data.chartData.length - 1]?.price || 100
-          const newDataPoint = generateRealtimeDataPoint(lastPrice)
-          return NextResponse.json({
-            success: true,
-            chartData: [newDataPoint],
-            symbol: ticker,
-            range,
-            dataPoints: 1,
-            isRealtime: true,
-            isSimulated: true,
-          })
-        }
+      if (response.status === 429) {
         return NextResponse.json(
           {
             error: "Rate limit exceeded",
@@ -162,6 +105,24 @@ export async function GET(request: NextRequest, { params }: { params: { ticker: 
           },
           { status: 429 },
         )
+      }
+
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    const contentType = response.headers.get("content-type")
+    if (!contentType || !contentType.includes("application/json")) {
+      const textResponse = await response.text()
+      console.error("Non-JSON response:", textResponse.substring(0, 100))
+
+      if (cached?.data?.chartData?.length) {
+        return NextResponse.json({
+          ...cached.data,
+          isRealtime: false,
+          isSimulated: false,
+          isStale: true,
+          marketStatusLabel: `${cached.data.marketStatusLabel || "Latest chart"} - temporarily delayed`,
+        })
       }
 
       throw new Error("Invalid response format from Yahoo Finance API")
@@ -176,8 +137,9 @@ export async function GET(request: NextRequest, { params }: { params: { ticker: 
 
     const timestamps: number[] = result.timestamp || []
     const prices: Array<number | null> = result.indicators?.quote?.[0]?.close || []
+    const marketState = result.meta?.marketState || "UNKNOWN"
+    const isMarketOpen = isMarketActivelyTrading(marketState)
 
-    // Format chart data
     const chartData: ChartDataPoint[] = timestamps
       .map((timestamp: number, index: number) => ({
         time: new Date(timestamp * 1000).toISOString(),
@@ -186,15 +148,15 @@ export async function GET(request: NextRequest, { params }: { params: { ticker: 
       }))
       .filter((point: ChartDataPoint) => point.price > 0)
 
-    // Compute technical indicators for non-realtime ranges with sufficient data
-    const closePrices = chartData.map((p) => p.price)
+    const effectiveChartData = range === "3S" ? chartData.slice(-30) : chartData
+    const closePrices = effectiveChartData.map((p) => p.price)
     let indicators = null
     let indicatorSeries = null
 
-    if (closePrices.length >= 26) {
+    // Need at least 35 points so MACD(12,26,9) and all derived series are stable.
+    if (range !== "3S" && closePrices.length >= 35) {
       indicators = computeAllIndicators(closePrices)
 
-      // Compute series data for chart overlays
       const bbSeries = bollingerSeries(closePrices)
       const rSeries = rsiSeries(closePrices)
       const mSeries = macdSeries(closePrices)
@@ -210,14 +172,23 @@ export async function GET(request: NextRequest, { params }: { params: { ticker: 
       }
     }
 
-    const responseData = {
+    const statusLabel = marketStateLabel(marketState)
+    const responseData: ChartResponse = {
       success: true,
-      chartData,
+      chartData: effectiveChartData,
       indicators,
       indicatorSeries,
       symbol: ticker,
       range,
-      dataPoints: chartData.length,
+      dataPoints: effectiveChartData.length,
+      marketState,
+      marketStatusLabel: range === "3S" && !isMarketOpen
+        ? `${statusLabel} - showing latest official chart`
+        : statusLabel,
+      isMarketOpen,
+      isRealtime: range === "3S" && isMarketOpen,
+      isSimulated: false,
+      isStale: range === "3S" && !isMarketOpen,
     }
 
     cache.set(cacheKey, { data: responseData, timestamp: Date.now() })

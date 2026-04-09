@@ -15,6 +15,7 @@ import {
   scheduleSync,
   setServerVersion,
   attachNetworkListeners,
+  loadQueuedPayload,
   replayQueue,
   patchServer,
   type ServerSnapshot,
@@ -70,7 +71,7 @@ interface TradingState {
 }
 
 interface TradingActions {
-  setBalance: (balance: number) => void
+  setBalance: (updater: number | ((prev: number) => number)) => void
   setPositions: (
     updater:
       | Record<string, StoredPosition>
@@ -104,7 +105,13 @@ export const useTradingStore = create<TradingStore>()((set, get) => ({
   _hydrated: false,
   _serverHydrated: false,
 
-  setBalance: (balance) => set({ balance }),
+  setBalance: (updater) => {
+    if (typeof updater === "function") {
+      set((state) => ({ balance: updater(state.balance) }))
+    } else {
+      set({ balance: updater })
+    }
+  },
 
   setPositions: (updater) => {
     if (typeof updater === "function") {
@@ -258,12 +265,29 @@ export function initTradingStore(): () => void {
     _hydrated: true,
   })
 
+  const queued = loadQueuedPayload()
+  if (queued) {
+    setState({
+      balance: queued.balance,
+      positions: queued.positions ?? {},
+      trades: queued.trades ?? [],
+      gamification: queued.gamification ?? DEFAULT_GAMIFICATION,
+      onboardingStatus: (queued.onboardingStatus || "not_started") as OnboardingStatus,
+      _hydrated: true,
+    })
+  }
+
   // 2. Server hydration (async, replaces local if server has data)
   fetchServerState()
     .then(({ snapshot, version }) => {
       if (snapshot) {
         setServerVersion(version)
-        applyServerSnapshot(snapshot)
+        if (queued) {
+          setState({ _serverHydrated: true })
+          replayQueue().catch(() => {})
+        } else {
+          applyServerSnapshot(snapshot)
+        }
       } else {
         // No server data — push local state to server as initial seed
         setState({ _serverHydrated: true })
@@ -309,16 +333,17 @@ export function initTradingStore(): () => void {
   // 4. Debounced persistence on every state change
   const unsub = subscribe(() => {
     if (!getState()._hydrated) return
+    const s = getState()
+    // Keep local cache instantly consistent so reload never loses a fresh trade.
+    saveBalance(s.balance)
+    savePositions(s.positions)
+    saveTrades(s.trades)
+    saveWatchlist(s.watchlist)
+    saveGamification(s.gamification)
+
     if (persistTimer) clearTimeout(persistTimer)
     persistTimer = setTimeout(() => {
-      const s = getState()
-      // Local cache
-      saveBalance(s.balance)
-      savePositions(s.positions)
-      saveTrades(s.trades)
-      saveWatchlist(s.watchlist)
-      saveGamification(s.gamification)
-      // Server sync (debounced internally)
+      // Server sync can remain debounced.
       scheduleSync(buildSyncPayload())
     }, PERSIST_DEBOUNCE_MS)
   })

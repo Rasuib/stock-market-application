@@ -116,21 +116,27 @@ export function DashboardSidebar({ className, ...props }: React.ComponentProps<t
 
   return (
     <Sidebar {...props} className={cn("py-sides", className)}>
-      <UI_SidebarHeader className="rounded-t-lg flex gap-3 flex-row rounded-b-none">
-        <div className="flex gap-3 flex-row cursor-pointer" role="button" tabIndex={0} onClick={() => router.push("/dashboard")} onKeyDown={(e) => { if (e.key === "Enter") router.push("/dashboard") }}>
-          <div className="flex overflow-clip size-12 shrink-0 items-center justify-center rounded bg-sidebar-primary-foreground/10 transition-colors group-hover:bg-sidebar-primary text-sidebar-primary-foreground">
-            <TrendingUpIcon className="size-8 group-hover:scale-110 transition-transform text-blue-500" />
+      <UI_SidebarHeader className="rounded-t-lg rounded-b-none border-b border-sidebar-border/70 bg-sidebar/70 px-4 py-4 backdrop-blur">
+        <div
+          className="group flex cursor-pointer flex-row gap-3"
+          role="button"
+          tabIndex={0}
+          onClick={() => router.push("/dashboard")}
+          onKeyDown={(e) => { if (e.key === "Enter") router.push("/dashboard") }}
+        >
+          <div className="flex size-12 shrink-0 items-center justify-center overflow-clip rounded-md bg-sidebar-primary/15 ring-1 ring-sidebar-primary/35 transition-colors">
+            <TrendingUpIcon className="size-8 text-sidebar-primary group-hover:scale-105 transition-transform" />
           </div>
           <div className="grid min-w-0 flex-1 text-left leading-tight">
-            <span className="text-xl font-display text-blue-400 xl:text-2xl">Tradia</span>
-            <span className="text-[10px] uppercase text-muted-foreground/90 xl:text-xs">Stock Market Learning Platform</span>
+            <span className="text-xl font-display text-sidebar-foreground xl:text-2xl">Tradia</span>
+            <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/90 xl:text-xs">Market Training Terminal</span>
           </div>
         </div>
       </UI_SidebarHeader>
 
-      <UI_SidebarContent>
+      <UI_SidebarContent className="bg-sidebar/35">
         {navData.navMain.map((group, i) => (
-          <UI_SidebarGroup className={cn(i === 0 && "rounded-t-none")} key={group.title}>
+          <UI_SidebarGroup className={cn(i === 0 && "rounded-t-none", "px-2")} key={group.title}>
             <UI_SidebarGroupLabel>
               <Bullet className="mr-2" />
               {group.title}
@@ -143,8 +149,9 @@ export function DashboardSidebar({ className, ...props }: React.ComponentProps<t
                       isActive={currentView === item.view && pathname === "/dashboard"}
                       onClick={() => handleNavigation(item.view)}
                       aria-current={currentView === item.view && pathname === "/dashboard" ? "page" : undefined}
+                      className="rounded-md text-[13px] tracking-wide"
                     >
-                      {React.createElement(item.icon, { className: "size-5" })}
+                      {React.createElement(item.icon, { className: "size-4" })}
                       <span>{item.title}</span>
                     </UI_SidebarMenuButton>
                   </UI_SidebarMenuItem>
@@ -155,11 +162,11 @@ export function DashboardSidebar({ className, ...props }: React.ComponentProps<t
         ))}
       </UI_SidebarContent>
 
-      <UI_SidebarFooter className="p-0">
+      <UI_SidebarFooter className="p-0 bg-sidebar/70 border-t border-sidebar-border/70">
         <div className="px-3 py-2">
           <SyncStatusBadge />
         </div>
-        <UI_SidebarGroup>
+        <UI_SidebarGroup className="px-2 pb-2">
           <UI_SidebarGroupLabel>
             <Bullet className="mr-2" />
             User
@@ -183,9 +190,9 @@ export function DashboardSidebar({ className, ...props }: React.ComponentProps<t
                       height={120}
                     />
                   </div>
-                  <div className="group/item pl-3 pr-1.5 pt-2 pb-1.5 flex-1 flex bg-sidebar-accent hover:bg-sidebar-accent-active/75 items-center rounded group-data-[state=open]:bg-sidebar-accent-active group-data-[state=open]:hover:bg-sidebar-accent-active group-data-[state=open]:text-sidebar-accent-foreground">
+                  <div className="group/item flex flex-1 items-center rounded-md bg-sidebar-accent px-3 pt-2 pb-1.5 pr-1.5 hover:bg-sidebar-accent-active/75 group-data-[state=open]:bg-sidebar-accent-active group-data-[state=open]:hover:bg-sidebar-accent-active group-data-[state=open]:text-sidebar-accent-foreground">
                     <div className="grid flex-1 text-left text-sm leading-tight">
-                      <span className="truncate text-xl font-display">{displayUser.name}</span>
+                      <span className="truncate text-lg font-display">{displayUser.name}</span>
                       <span className="truncate text-xs uppercase opacity-50 group-hover/item:opacity-100">
                         {displayUser.email}
                       </span>

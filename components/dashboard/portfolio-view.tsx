@@ -22,7 +22,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { useTradingStore } from "@/stores/trading-store"
+import { INITIAL_BALANCE, useTradingStore } from "@/stores/trading-store"
 import { useTradingStats } from "@/hooks/use-trading-stats"
 import AISessionInsights from "@/components/dashboard/ai-session-insights"
 import AccountResetButton from "@/components/dashboard/account-reset-button"
@@ -131,7 +131,6 @@ export default function PortfolioView() {
       setAllocation(updatedAllocation)
       setCurrentPrices(latestPrices)
 
-      let totalInvested = 0
       let currentValue = 0
       let bestReturn = Number.NEGATIVE_INFINITY
       let worstReturn = Number.POSITIVE_INFINITY
@@ -140,8 +139,6 @@ export default function PortfolioView() {
 
       for (const item of updatedAllocation) {
         const pos = positions[item.symbol]
-        const invested = pos.quantity * pos.avgPrice
-        totalInvested += invested
         currentValue += item.value
 
         const returnPct = pos.avgPrice > 0 ? ((item.currentPrice - pos.avgPrice) / pos.avgPrice) * 100 : 0
@@ -156,8 +153,9 @@ export default function PortfolioView() {
         }
       }
 
-      const totalReturn = currentValue - totalInvested
-      const totalReturnPercent = totalInvested > 0 ? (totalReturn / totalInvested) * 100 : 0
+      // Net performance should include both unrealized and realized P/L.
+      const totalReturn = totalValue - INITIAL_BALANCE
+      const totalReturnPercent = INITIAL_BALANCE > 0 ? (totalReturn / INITIAL_BALANCE) * 100 : 0
 
       setPerformance({
         totalReturn,
@@ -189,6 +187,12 @@ export default function PortfolioView() {
         }),
     [positions, currentPrices],
   )
+  const investedValue = useMemo(
+    () => openPositions.reduce((sum, item) => sum + item.value, 0),
+    [openPositions],
+  )
+  const netPnL = totalPortfolioValue - INITIAL_BALANCE
+  const netPnLPercent = INITIAL_BALANCE > 0 ? (netPnL / INITIAL_BALANCE) * 100 : 0
 
   const getMarketMeta = (symbol: string) => {
     const market: "US" | "IN" = symbol.endsWith(".NS") || symbol.endsWith(".BO") ? "IN" : "US"
@@ -232,7 +236,8 @@ export default function PortfolioView() {
   })
 
   const handleSellFromPortfolio = (symbol: string) => {
-    const position = positions[symbol]
+    const state = useTradingStore.getState()
+    const position = state.positions[symbol]
     if (!position || position.quantity <= 0) return
 
     const quantity = getSellQuantity(symbol, position.quantity)
@@ -277,7 +282,7 @@ export default function PortfolioView() {
     }
 
     const proceeds = quantity * result.fillPrice - result.commissionPaid
-    const newBalance = balance + proceeds
+    const newBalance = state.balance + proceeds
     const remaining = position.quantity - quantity
     const profit = (result.fillPrice - position.avgPrice) * quantity - result.commissionPaid
     const profitPercent = position.avgPrice > 0
@@ -286,7 +291,7 @@ export default function PortfolioView() {
     const now = new Date()
     const nowIso = now.toISOString()
 
-    setBalance(newBalance)
+    setBalance(() => newBalance)
     setPositions(prev => ({
       ...prev,
       [symbol]: {
@@ -367,6 +372,27 @@ export default function PortfolioView() {
         ))}
       </div>
 
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <div className="rounded-lg border border-surface-border bg-surface p-3">
+          <p className="text-[11px] text-muted-foreground">Net Worth</p>
+          <p className="text-base font-mono">${totalPortfolioValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+        </div>
+        <div className="rounded-lg border border-surface-border bg-surface p-3">
+          <p className="text-[11px] text-muted-foreground">Cash</p>
+          <p className="text-base font-mono">${balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+        </div>
+        <div className="rounded-lg border border-surface-border bg-surface p-3">
+          <p className="text-[11px] text-muted-foreground">Invested</p>
+          <p className="text-base font-mono">${investedValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+        </div>
+        <div className="rounded-lg border border-surface-border bg-surface p-3">
+          <p className="text-[11px] text-muted-foreground">Total P/L</p>
+          <p className={`text-base font-mono ${netPnL >= 0 ? "text-profit" : "text-loss"}`}>
+            {netPnL >= 0 ? "+" : "-"}${Math.abs(netPnL).toLocaleString(undefined, { maximumFractionDigits: 2 })} ({netPnLPercent >= 0 ? "+" : ""}{netPnLPercent.toFixed(2)}%)
+          </p>
+        </div>
+      </div>
+
       {/* Risk analytics — promoted above portfolio listing */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <RiskAnalyticsCard />
@@ -375,7 +401,7 @@ export default function PortfolioView() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <div className="bg-surface border border-surface-border rounded-lg p-4">
-          <h3 className="text-sm text-muted-foreground mb-4 font-mono uppercase">Portfolio Allocation</h3>
+          <h3 className="text-sm text-muted-foreground mb-4 font-mono">Allocation</h3>
           <div className="min-h-48 sm:min-h-64 lg:min-h-75 flex items-center justify-center">
             {isLoading ? (
               <div className="text-center">
@@ -452,7 +478,7 @@ export default function PortfolioView() {
                       <p className="text-xl font-bold">
                         ${totalPortfolioValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </p>
-                      <p className="text-xs text-muted-foreground">TOTAL</p>
+                      <p className="text-xs text-muted-foreground">Net Worth</p>
                     </div>
                   </div>
                 </div>
@@ -481,10 +507,10 @@ export default function PortfolioView() {
         </div>
 
         <div className="bg-surface border border-surface-border rounded-lg p-4">
-          <h3 className="text-sm text-muted-foreground mb-4 font-mono uppercase">Portfolio Performance</h3>
+          <h3 className="text-sm text-muted-foreground mb-4 font-mono">Performance</h3>
           <div className="grid grid-cols-1 gap-4">
             <div className="p-4 bg-surface-elevated rounded-lg border border-surface-border">
-              <p className="text-xs text-muted-foreground mb-2">TOTAL RETURN</p>
+              <p className="text-xs text-muted-foreground mb-2">TOTAL P/L (REALIZED + UNREALIZED)</p>
               <p className={`text-2xl font-mono ${performance.totalReturn >= 0 ? "text-profit" : "text-loss"}`}>
                 {performance.totalReturn >= 0 ? "+" : ""}
                 {performance.totalReturnPercent.toFixed(2)}%
@@ -624,8 +650,7 @@ export default function PortfolioView() {
         <AISessionInsights />
       </div>
 
-      {/* Danger zone */}
-      <div className="border border-destructive/20 rounded-lg p-4">
+      <div className="border border-surface-border rounded-lg p-4 bg-surface">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-medium">Reset Account</h3>

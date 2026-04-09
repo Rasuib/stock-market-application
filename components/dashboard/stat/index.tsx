@@ -33,9 +33,7 @@ const AnimatedNumber: React.FC<AnimatedNumberProps> = ({ value, prefix = "", suf
 export default function DashboardStat({ label, value, description, icon, tag, intent, direction }: DashboardStatProps) {
   const Icon = icon
 
-  // Extract prefix, numeric value, and suffix from the value string
   const parseValue = (val: string) => {
-    // Match pattern: optional prefix + number + optional suffix
     const match = val.match(/^([^\d.-]*)([+-]?\d*\.?\d+)([^\d]*)$/)
 
     if (match) {
@@ -44,7 +42,7 @@ export default function DashboardStat({ label, value, description, icon, tag, in
         prefix: prefix || "",
         numericValue: Number.parseFloat(numStr),
         suffix: suffix || "",
-        isNumeric: !isNaN(Number.parseFloat(numStr)),
+        isNumeric: !Number.isNaN(Number.parseFloat(numStr)),
       }
     }
 
@@ -56,96 +54,66 @@ export default function DashboardStat({ label, value, description, icon, tag, in
     }
   }
 
-  const getIntentClassName = () => {
-    if (intent === "positive") return "text-success"
-    if (intent === "negative") return "text-destructive"
-    return "text-muted-foreground"
-  }
+  const intentColor =
+    intent === "positive" ? "text-profit" : intent === "negative" ? "text-loss" : "text-muted-foreground"
 
   const { prefix, numericValue, suffix, isNumeric } = parseValue(value)
+  const trendLabel = direction === "up" ? "UP" : direction === "down" ? "DOWN" : "FLAT"
 
   return (
-    <Card className="relative overflow-hidden">
-      <CardHeader className="flex items-center justify-between">
-        <CardTitle className="flex items-center gap-2.5">
+    <Card className="relative overflow-hidden border-surface-border/80 bg-surface/80 shadow-[0_10px_30px_-20px_rgba(0,0,0,0.7)]">
+      <CardHeader className="flex items-center justify-between border-b border-surface-border/60 pb-3">
+        <CardTitle className="flex items-center gap-2 text-[13px] tracking-wide">
           <Bullet />
           {label}
         </CardTitle>
-        <Icon className="size-4 text-muted-foreground" />
+        <div className="rounded-md bg-background/60 p-1.5 ring-1 ring-surface-border/80">
+          <Icon className="size-4 text-muted-foreground" />
+        </div>
       </CardHeader>
 
-      <CardContent className="bg-accent flex-1 pt-2 md:pt-6 overflow-clip relative">
-        <div className="flex items-center">
-          <span className="text-4xl md:text-5xl font-display">
+      <CardContent className="relative flex-1 overflow-clip bg-surface-elevated/50 pt-4 md:pt-5">
+        <div className="flex items-end justify-between gap-2">
+          <span className="text-3xl leading-none font-display md:text-4xl">
             {isNumeric ? <AnimatedNumber value={numericValue} prefix={prefix} suffix={suffix} /> : value}
           </span>
-          {tag && (
-            <Badge variant="default" className="uppercase ml-3">
-              {tag}
-            </Badge>
-          )}
+          <Badge variant="outline" className={cn("text-[10px] tracking-wide uppercase", intentColor)}>
+            {trendLabel}
+          </Badge>
         </div>
 
         {description && (
-          <div className="justify-between">
-            <p className="text-xs md:text-sm font-medium text-muted-foreground tracking-wide">{description}</p>
+          <div className="mt-2">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground md:text-sm">{description}</p>
           </div>
         )}
 
-        {/* Marquee Animation */}
-        {direction && (
-          <div className="absolute top-0 right-0 w-14 h-full pointer-events-none overflow-hidden group">
-            <div
-              className={cn(
-                "flex flex-col transition-all duration-500",
-                "group-hover:scale-105 group-hover:brightness-110",
-                getIntentClassName(),
-                direction === "up" ? "animate-marquee-up" : "animate-marquee-down",
-              )}
-            >
-              <div className={cn("flex", direction === "up" ? "flex-col-reverse" : "flex-col")}>
-                {Array.from({ length: 6 }, (_, i) => (
-                  <Arrow key={i} direction={direction} index={i} />
-                ))}
-              </div>
-              <div className={cn("flex", direction === "up" ? "flex-col-reverse" : "flex-col")}>
-                {Array.from({ length: 6 }, (_, i) => (
-                  <Arrow key={i} direction={direction} index={i} />
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
+        <div className="mt-3 flex items-center justify-between">
+          {tag ? (
+            <Badge variant="secondary" className="text-[10px] font-medium tracking-[0.08em] uppercase">
+              {tag}
+            </Badge>
+          ) : (
+            <span className="text-[10px] text-muted-foreground">No tag</span>
+          )}
+          <div
+            className={cn(
+              "h-1.5 w-14 rounded-full",
+              direction === "up" ? "bg-profit/70" : direction === "down" ? "bg-loss/70" : "bg-muted",
+            )}
+          />
+        </div>
+
+        <div className="pointer-events-none absolute inset-0">
+          <div
+            className={cn(
+              "absolute -right-8 -top-8 h-24 w-24 rounded-full blur-2xl",
+              intent === "positive" ? "bg-profit/20" : intent === "negative" ? "bg-loss/20" : "bg-primary/15",
+            )}
+          />
+          <div className="absolute -left-10 -bottom-10 h-24 w-24 rounded-full bg-primary/10 blur-2xl" />
+        </div>
       </CardContent>
     </Card>
-  )
-}
-
-interface ArrowProps {
-  direction: "up" | "down"
-  index: number
-}
-
-const Arrow = ({ direction, index }: ArrowProps) => {
-  const staggerDelay = index * 0.15 // Faster stagger
-  const phaseDelay = (index % 3) * 0.8 // Different phase groups
-
-  return (
-    <span
-      style={{
-        animationDelay: `${staggerDelay + phaseDelay}s`,
-        animationDuration: "3s",
-        animationTimingFunction: "cubic-bezier(0.4, 0.0, 0.2, 1)",
-      }}
-      className={cn(
-        "text-center text-5xl size-14 font-display leading-none block",
-        "transition-all duration-700 ease-out",
-        "animate-marquee-pulse",
-
-        "will-change-transform",
-      )}
-    >
-      {direction === "up" ? "↑" : "↓"}
-    </span>
   )
 }

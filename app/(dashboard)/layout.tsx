@@ -26,10 +26,10 @@ export default async function DashboardLayout({
         <MobileHeader />
 
         <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-gap lg:px-sides">
-          <div className="hidden lg:block col-span-2 top-0 relative">
+          <div className="hidden lg:block col-span-3 xl:col-span-2 top-0 relative">
             <DashboardSidebar />
           </div>
-          <main id="main-content" className="col-span-1 lg:col-span-10 pb-16 lg:pb-0">
+          <main id="main-content" className="col-span-1 lg:col-span-9 xl:col-span-10 pb-16 lg:pb-0">
             {children}
           </main>
         </div>

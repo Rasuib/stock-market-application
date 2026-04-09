@@ -10,6 +10,7 @@ import RealTimeStockChart from "./real-time-stock-chart"
 import { fetchJSON } from "@/lib/fetch-client"
 import { useTradingStore } from "@/stores/trading-store"
 import { SearchResultsSkeleton, StockDetailSkeleton } from "./loading-skeletons"
+import { marketStateLabel, normalizeYahooMarketState } from "@/lib/market-state"
 
 interface StockData {
   symbol: string
@@ -18,6 +19,7 @@ interface StockData {
   changePercent: number
   currency: string
   marketState: string
+  marketStatusLabel?: string
   exchangeName: string
 }
 
@@ -157,24 +159,27 @@ export default function StockSearchPanel() {
 
   const handlePriceUpdate = useCallback(
     (price: number, change: number, changePercent: number) => {
-      if (!stockData) return
+      setStockData((prev) => {
+        if (!prev) return prev
 
-      const updatedStockData = {
-        ...stockData,
-        price,
-        change,
-        changePercent,
-      }
+        const updatedStockData = {
+          ...prev,
+          price,
+          change,
+          changePercent,
+        }
 
-      setStockData(updatedStockData)
-      storeSelectStock({
-        symbol: stockData.symbol,
-        price,
-        name: stockData.symbol,
-        market: stockData.currency === "INR" ? "IN" : "US",
+        storeSelectStock({
+          symbol: prev.symbol,
+          price,
+          name: prev.symbol,
+          market: prev.currency === "INR" ? "IN" : "US",
+        })
+
+        return updatedStockData
       })
     },
-    [storeSelectStock, stockData],
+    [storeSelectStock],
   )
 
   const handleAddToWatchlist = (result: SearchResult) => {
@@ -212,9 +217,23 @@ export default function StockSearchPanel() {
     return null
   }
 
+  const getMarketStateBadgeClass = (marketState: string) => {
+    switch (normalizeYahooMarketState(marketState)) {
+      case "open":
+        return "bg-profit/15 text-profit border-profit/25"
+      case "pre-market":
+      case "after-hours":
+        return "bg-warning/15 text-warning border-warning/25"
+      case "closed":
+        return "bg-muted text-muted-foreground border-border"
+      default:
+        return "bg-primary/10 text-primary border-primary/20"
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <Card>
+      <Card className="border-surface-border bg-surface/75 shadow-[0_12px_40px_-28px_rgba(0,0,0,0.8)]">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Search className="w-5 h-5 text-primary" />
@@ -231,6 +250,7 @@ export default function StockSearchPanel() {
               value={ticker}
               onChange={(e) => setTicker(e.target.value)}
               aria-label="Stock ticker search"
+              className="bg-background/60"
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault()
@@ -238,7 +258,7 @@ export default function StockSearchPanel() {
                 }
               }}
             />
-            <Button onClick={handleMultiSearch} disabled={loading || !ticker.trim()} className="touch-manipulation max-sm:px-3">
+            <Button onClick={handleMultiSearch} disabled={loading || !ticker.trim()} className="touch-manipulation max-sm:px-3 shadow-sm">
               {loading ? <><Loader2 className="w-4 h-4 animate-spin mr-1" /> Searching</> : "Search"}
             </Button>
           </div>
@@ -264,7 +284,7 @@ export default function StockSearchPanel() {
               {searchResults.map((result, index) => (
                 <div
                   key={`${result.symbol}-${index}`}
-                  className="flex items-center justify-between gap-4 p-4 bg-surface rounded-lg border border-surface-border hover:border-primary/30 transition-colors cursor-pointer max-md:flex-col"
+                  className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-surface-border bg-surface-elevated/60 p-4 transition-colors hover:border-primary/35 hover:bg-surface-elevated max-md:flex-col"
                   onClick={() => selectStock(result)}
                   onKeyDown={(e) => { if (e.key === "Enter") selectStock(result) }}
                   role="button"
@@ -278,9 +298,12 @@ export default function StockSearchPanel() {
                       {result.currency === "INR" ? "₹" : "$"}
                       {result.price.toFixed(2)}
                     </p>
-                    <p className="text-xs text-muted-foreground break-words">
-                      {result.exchangeFullName} | {result.marketState}
-                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <p className="text-xs text-muted-foreground break-words">{result.exchangeFullName}</p>
+                      <Badge variant="outline" className={getMarketStateBadgeClass(result.marketState)}>
+                        {marketStateLabel(result.marketState)}
+                      </Badge>
+                    </div>
                   </div>
                   <div className="text-right max-md:w-full">
                     <p className={`text-lg font-semibold font-mono ${result.change >= 0 ? "text-profit" : "text-loss"}`}>
@@ -311,14 +334,19 @@ export default function StockSearchPanel() {
 
           {stockData && !detailLoading && !showSearchResults && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between p-4 bg-surface rounded-lg border border-surface-border">
+              <div className="flex items-center justify-between rounded-lg border border-surface-border bg-surface-elevated/60 p-4">
                 <div>
                   <h3 className="text-xl font-bold">{stockData.symbol}</h3>
                   <p className="text-2xl font-mono">
                     {stockData.currency === "INR" ? "₹" : "$"}
                     {stockData.price.toFixed(2)}
                   </p>
-                  <p className="text-xs text-muted-foreground">{stockData.exchangeName}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <p className="text-xs text-muted-foreground">{stockData.exchangeName}</p>
+                    <Badge variant="outline" className={getMarketStateBadgeClass(stockData.marketState)}>
+                      {stockData.marketStatusLabel || marketStateLabel(stockData.marketState)}
+                    </Badge>
+                  </div>
                 </div>
                 <div className="text-right">
                   <p className={`text-lg font-semibold font-mono ${stockData.change >= 0 ? "text-profit" : "text-loss"}`}>
@@ -337,7 +365,7 @@ export default function StockSearchPanel() {
               </div>
 
               {newsData && (
-                <div className="p-4 bg-surface rounded-lg border border-surface-border">
+                <div className="rounded-lg border border-surface-border bg-surface-elevated/60 p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="text-sm font-semibold">News Sentiment</h4>
                     <Badge className={getSentimentColor(newsData.sentiment)}>
@@ -394,6 +422,7 @@ export default function StockSearchPanel() {
           change={stockData.change}
           changePercent={stockData.changePercent}
           currency={stockData.currency}
+          marketState={stockData.marketState}
           onPriceUpdate={handlePriceUpdate}
         />
       )}

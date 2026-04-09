@@ -3,9 +3,10 @@
 import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   Activity, TrendingUp, TrendingDown, Minus, BarChart3, Gauge,
-  ArrowUpCircle, ArrowDownCircle, AlertTriangle, Zap,
+  ArrowUpCircle, ArrowDownCircle, AlertTriangle, Zap, Info,
 } from "lucide-react"
 import { useTradingStore } from "@/stores/trading-store"
 import type { IndicatorSnapshot } from "@/lib/indicators"
@@ -63,11 +64,31 @@ function GaugeBar({ value, min, max, zones }: {
   )
 }
 
-function IndicatorRow({ label, value, signal, icon: Icon }: {
+function MetricInfo({ text }: { text: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="What does this metric mean?"
+          className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground/80 transition-colors hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent sideOffset={6} className="max-w-64 leading-relaxed">
+        {text}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function IndicatorRow({ label, value, signal, icon: Icon, helpText }: {
   label: string
   value: string
   signal: "bullish" | "bearish" | "neutral"
   icon: React.ElementType
+  helpText: string
 }) {
   const color = signal === "bullish" ? "text-success" : signal === "bearish" ? "text-destructive" : "text-muted-foreground"
 
@@ -76,6 +97,7 @@ function IndicatorRow({ label, value, signal, icon: Icon }: {
       <div className="flex items-center gap-2">
         <Icon className={`w-4 h-4 ${color}`} />
         <span className="font-mono text-xs text-foreground/80">{label}</span>
+        <MetricInfo text={helpText} />
       </div>
       <div className="flex items-center gap-2">
         <span className={`font-mono text-sm font-semibold ${color}`}>{value}</span>
@@ -171,7 +193,10 @@ export default function TechnicalIndicatorsPanel() {
             : "bg-muted/5 border-muted/30"
         }`}>
           <div className="flex items-center justify-between mb-2">
-            <span className="font-mono text-xs text-muted-foreground">OVERALL SIGNAL</span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-xs text-muted-foreground">OVERALL SIGNAL</span>
+              <MetricInfo text="Weighted consensus across RSI, MACD, Bollinger, Stochastic, and SMA trend. Confidence reflects how much indicator coverage is available." />
+            </div>
             <SignalBadge direction={overallSignal.direction} />
           </div>
           <div className="flex items-center gap-3">
@@ -215,6 +240,7 @@ export default function TechnicalIndicatorsPanel() {
                 value={rsi.value.toFixed(1)}
                 signal={rsi.signal === "overbought" ? "bearish" : rsi.signal === "oversold" ? "bullish" : "neutral"}
                 icon={Gauge}
+                helpText="Relative Strength Index (0-100). Above 70 is typically overbought, below 30 is oversold. It measures momentum, not guaranteed reversals."
               />
               <div className="mt-2">
                 <GaugeBar
@@ -243,6 +269,7 @@ export default function TechnicalIndicatorsPanel() {
                 value={macd.macd > 0 ? `+${macd.macd.toFixed(2)}` : macd.macd.toFixed(2)}
                 signal={macd.trend}
                 icon={Activity}
+                helpText="MACD compares fast EMA(12) vs slow EMA(26). Above zero is generally bullish trend bias, below zero bearish. Crossovers can hint momentum shifts."
               />
               <div className="grid grid-cols-3 gap-2 mt-2">
                 <div className="text-center">
@@ -286,6 +313,7 @@ export default function TechnicalIndicatorsPanel() {
                   : "neutral"
                 }
                 icon={BarChart3}
+                helpText="Bollinger Bands track volatility around a 20-period average. %B shows where price sits inside the band range. Tight bands can indicate a volatility squeeze."
               />
               <div className="grid grid-cols-3 gap-2 mt-2">
                 <div className="text-center">
@@ -335,6 +363,7 @@ export default function TechnicalIndicatorsPanel() {
                   : "neutral"
                 }
                 icon={Activity}
+                helpText="Stochastic compares close price to its recent high-low range. %K/%D near 80+ can be overbought, near 20- can be oversold. Crosses can signal momentum turns."
               />
               <div className="grid grid-cols-2 gap-4 mt-2">
                 <div>
@@ -387,8 +416,9 @@ export default function TechnicalIndicatorsPanel() {
               <IndicatorRow
                 label="ATR (14)"
                 value={atr.value.toFixed(2)}
-                signal={atr.volatility === "high" ? "bearish" : atr.volatility === "low" ? "bullish" : "neutral"}
+                signal="neutral"
                 icon={AlertTriangle}
+                helpText="Average True Range measures volatility only. Higher ATR means wider price movement, lower ATR means quieter movement. ATR is not a directional indicator."
               />
               <div className="flex items-center gap-3 mt-2">
                 <Badge variant="outline" className={`text-[11px] ${
@@ -411,23 +441,33 @@ export default function TechnicalIndicatorsPanel() {
               <div className="flex items-center gap-2 mb-2">
                 <TrendingUp className="w-4 h-4 text-chart-2" />
                 <span className="font-mono text-xs text-foreground/80">Moving Averages</span>
+                <MetricInfo text="SMA and EMA smooth noisy price action to reveal direction. EMA reacts faster than SMA. Price above key averages often indicates stronger trend structure." />
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {sma20 && (
                   <div className="text-center p-2 bg-surface rounded">
-                    <p className="text-[11px] font-mono text-muted-foreground">SMA(20)</p>
+                    <div className="flex items-center justify-center gap-1">
+                      <p className="text-[11px] font-mono text-muted-foreground">SMA(20)</p>
+                      <MetricInfo text="Simple Moving Average of last 20 closes. Slower, smoother trend reference line." />
+                    </div>
                     <p className="text-xs font-mono font-semibold text-chart-2">{sma20.toFixed(2)}</p>
                   </div>
                 )}
                 {ema12 && (
                   <div className="text-center p-2 bg-surface rounded">
-                    <p className="text-[11px] font-mono text-muted-foreground">EMA(12)</p>
+                    <div className="flex items-center justify-center gap-1">
+                      <p className="text-[11px] font-mono text-muted-foreground">EMA(12)</p>
+                      <MetricInfo text="Exponential Moving Average of last 12 closes. More sensitive to recent price changes." />
+                    </div>
                     <p className="text-xs font-mono font-semibold text-chart-4">{ema12.toFixed(2)}</p>
                   </div>
                 )}
                 {ema26 && (
                   <div className="text-center p-2 bg-surface rounded">
-                    <p className="text-[11px] font-mono text-muted-foreground">EMA(26)</p>
+                    <div className="flex items-center justify-center gap-1">
+                      <p className="text-[11px] font-mono text-muted-foreground">EMA(26)</p>
+                      <MetricInfo text="Exponential Moving Average of last 26 closes. Commonly paired with EMA(12) for MACD trend context." />
+                    </div>
                     <p className="text-xs font-mono font-semibold text-warning">{ema26.toFixed(2)}</p>
                   </div>
                 )}
@@ -438,7 +478,10 @@ export default function TechnicalIndicatorsPanel() {
 
         {/* Signal Votes */}
         <div className="pt-2 border-t border-border">
-          <p className="font-mono text-[11px] text-muted-foreground mb-2">SIGNAL VOTES</p>
+          <div className="mb-2 flex items-center gap-1.5">
+            <p className="font-mono text-[11px] text-muted-foreground">SIGNAL VOTES</p>
+            <MetricInfo text="Each indicator contributes a weighted bullish, bearish, or neutral vote. The weighted mix drives the overall signal." />
+          </div>
           <div className="space-y-1.5">
             {overallSignal.signals.map((vote) => (
               <div key={vote.indicator} className="flex items-center justify-between">

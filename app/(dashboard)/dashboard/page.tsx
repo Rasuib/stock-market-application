@@ -39,7 +39,7 @@ const iconMap = {
 
 const ViewFallback = () => (
   <div className="flex items-center justify-center py-20" role="status">
-    <div className="flex flex-col items-center gap-3">
+    <div className="flex flex-col items-center gap-3 rounded-lg border border-surface-border bg-surface px-8 py-8">
       <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
       <span className="sr-only">Loading...</span>
     </div>
@@ -52,7 +52,7 @@ const GATED_VIEWS = new Set(["portfolio", "news", "simulator", "learn", "challen
 function OnboardingGate() {
   const { setCurrentView } = useNavigation()
   return (
-    <div className="flex flex-col items-center justify-center py-20 gap-4">
+    <div className="flex flex-col items-center justify-center gap-4 rounded-lg border border-surface-border bg-surface p-10">
       <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
         <Lock className="w-6 h-6 text-muted-foreground" />
       </div>
@@ -72,7 +72,8 @@ function OnboardingGate() {
 export default function TradiaOverview() {
   const { currentView } = useNavigation()
   const onboardingStatus = useTradingStore((s) => s.onboardingStatus)
-  const onboardingComplete = onboardingStatus === "completed" || onboardingStatus === "skipped"
+  const tradeCount = useTradingStore((s) => s.trades.length)
+  const onboardingComplete = onboardingStatus === "completed" || onboardingStatus === "skipped" || tradeCount > 0
 
   useEffect(() => {
     return initTradingStore()
@@ -236,10 +237,10 @@ function InsightsSection() {
   const [activeTab, setActiveTab] = useState<InsightTab>("briefing")
 
   return (
-    <section aria-label="Insights and extras">
+    <section aria-label="Insights and extras" className="rounded-lg border border-surface-border bg-surface/70 px-4 py-3">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 w-full py-3 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full items-center gap-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
         aria-expanded={open}
       >
         <ChevronDown className={cn("w-4 h-4 transition-transform", open && "rotate-180")} />
@@ -290,10 +291,18 @@ function DashboardView() {
   const tradingStats = useTradingStats()
   const selectedStock = useTradingStore((s) => s.selectedStock)
   const onboardingStatus = useTradingStore((s) => s.onboardingStatus)
-  const showOnboarding = onboardingStatus !== "completed" && onboardingStatus !== "skipped"
+  const tradeCount = useTradingStore((s) => s.trades.length)
+  const showOnboarding = onboardingStatus !== "completed" && onboardingStatus !== "skipped" && tradeCount === 0
 
   return (
     <>
+      <div className="rounded-lg border border-surface-border bg-[linear-gradient(110deg,rgba(59,130,246,.16),transparent_55%),linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.01))] px-4 py-4 md:px-6 md:py-5">
+        <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Session Focus</p>
+        <p className="mt-1 text-sm md:text-base text-foreground">
+          Search one stock, make a thesis-driven trade, and review your coaching report before opening another position.
+        </p>
+      </div>
+
       {/* Onboarding for new users */}
       {showOnboarding && (
         <Suspense fallback={<ViewFallback />}>
@@ -302,7 +311,7 @@ function DashboardView() {
       )}
 
       {/* Stats row — compact overview */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {tradingStats.map((stat, index) => (
           <DashboardStat
             key={index}
@@ -320,7 +329,7 @@ function DashboardView() {
       {/* A. Primary action: Search + stock context (full width) */}
       {/* B. Trade controls appear inline when a stock is selected */}
       <Suspense fallback={<ViewFallback />}>
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           {/* Search & chart take more space — this is the primary action */}
           <div className={cn(
             "lg:col-span-7",
@@ -342,7 +351,7 @@ function DashboardView() {
 
       {/* Prompt: tell the user what to do next when no stock selected */}
       {!selectedStock && !showOnboarding && (
-        <div className="text-center py-6 text-muted-foreground">
+        <div className="rounded-lg border border-surface-border bg-surface/70 py-6 text-center text-muted-foreground">
           <p className="text-sm">Search for a stock above to start analyzing and trading.</p>
         </div>
       )}

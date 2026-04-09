@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { classifySentimentBatch, finbertToSentimentLabel, finbertToScore } from "@/lib/ml"
+import { classifySentimentBatch, finbertToSentimentLabel, finbertToScore, keywordFallback } from "@/lib/ml"
 
 /**
  * GET /api/news
@@ -20,23 +20,24 @@ import { classifySentimentBatch, finbertToSentimentLabel, finbertToScore } from 
  */
 export async function GET(request: NextRequest) {
   // Rate limiting handled by middleware
+  const { searchParams } = new URL(request.url)
+  const query = searchParams.get("q") || "stock market India"
+  const ticker = searchParams.get("ticker") || ""
+  const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1)
+  const limit = Math.max(1, Math.min(50, parseInt(searchParams.get("limit") || "10", 10) || 10))
 
   try {
-    const { searchParams } = new URL(request.url)
-    const query = searchParams.get("q") || "stock market India"
-    const ticker = searchParams.get("ticker") || ""
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1)
-    const limit = Math.max(1, Math.min(50, parseInt(searchParams.get("limit") || "10", 10) || 10))
-
     // ── Stage 1: Fetch raw articles ──
     let rawArticles: RawArticle[] = []
+    const aliases = buildSearchAliases({ ticker, query })
 
     if (ticker) {
-      rawArticles = await fetchYahooNews(ticker)
+      rawArticles = filterRelevantArticles(await fetchYahooNews(ticker), aliases, true)
     }
 
-    if (rawArticles.length === 0) {
-      rawArticles = await fetchGoogleNews(query, ticker)
+    if (rawArticles.length < 4) {
+      const googleArticles = filterRelevantArticles(await fetchGoogleNews(query, ticker, aliases), aliases, Boolean(ticker))
+      rawArticles = mergeArticles(rawArticles, googleArticles)
     }
 
     if (rawArticles.length === 0) {
@@ -49,7 +50,7 @@ export async function GET(request: NextRequest) {
 
     // ── Stage 3: Merge results ──
     const articles = rawArticles.map((article, i) => {
-      const fb = finbertResults.results[i]
+      const fb = finbertResults.results[i] ?? keywordFallback(texts[i] || article.title)
       return {
         id: i + 1,
         title: article.title,
@@ -92,7 +93,7 @@ export async function GET(request: NextRequest) {
     })
   } catch (error) {
     console.error("News API Error:", error)
-    const fallback = getFallbackArticles("")
+    const fallback = getFallbackArticles(ticker)
     const fallbackArticles = fallback.map((a, i) => ({
       id: i + 1,
       title: a.title,
@@ -120,7 +121,8 @@ export async function GET(request: NextRequest) {
       limit: 10,
       totalPages: fallbackTotalPages,
       hasMore: 1 < fallbackTotalPages,
-      query: "stock market",
+      query,
+      ticker,
       isFallback: true,
       sentimentModel: "heuristic-fallback",
       overallSentiment: { score: 50, label: "neutral", confidence: 0, bullishCount: 0, bearishCount: 0, neutralCount: 0 },
@@ -173,14 +175,19 @@ async function fetchYahooNews(ticker: string): Promise<RawArticle[]> {
   }
 }
 
-async function fetchGoogleNews(query: string, ticker: string): Promise<RawArticle[]> {
+async function fetchGoogleNews(query: string, ticker: string, aliases: string[]): Promise<RawArticle[]> {
   let searchQuery = query
+  const region = isIndianTicker(ticker) || /\b(nifty|sensex|nse|bse|india|indian)\b/i.test(query) ? "IN" : "US"
+
   if (ticker) {
-    searchQuery = `${ticker.replace(/\.(NS|BO)$/, "")} stock share price news`
+    searchQuery = aliases.slice(0, 4).join(" ") + " stock news"
   }
 
   try {
-    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(searchQuery)}&hl=en-IN&gl=IN&ceid=IN:en`
+    const locale = region === "IN"
+      ? "hl=en-IN&gl=IN&ceid=IN:en"
+      : "hl=en-US&gl=US&ceid=US:en"
+    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(searchQuery)}&${locale}`
     const response = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
     })
@@ -253,6 +260,98 @@ function cleanHtml(html: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\s*(Read more|Continue reading|Click here|Learn more)\.?\.?\.?\s*$/i, "")
+}
+
+function isIndianTicker(ticker: string): boolean {
+  return /\.(NS|BO)$/i.test(ticker)
+}
+
+function buildSearchAliases({ ticker, query }: { ticker: string; query: string }): string[] {
+  const aliases = new Set<string>()
+  const cleanTicker = ticker.replace(/\.(NS|BO)$/, "").toUpperCase()
+
+  if (cleanTicker) aliases.add(cleanTicker)
+
+  const knownCompanyNames: Record<string, string[]> = {
+    AAPL: ["Apple", "Apple Inc"],
+    MSFT: ["Microsoft", "Microsoft Corp"],
+    GOOGL: ["Alphabet", "Google", "Alphabet Inc"],
+    GOOG: ["Alphabet", "Google", "Alphabet Inc"],
+    TSLA: ["Tesla", "Tesla Inc"],
+    AMZN: ["Amazon", "Amazon.com"],
+    META: ["Meta", "Meta Platforms", "Facebook"],
+    NVDA: ["NVIDIA", "Nvidia Corp"],
+    NFLX: ["Netflix"],
+    RELIANCE: ["Reliance", "Reliance Industries"],
+    TCS: ["TCS", "Tata Consultancy Services"],
+    INFY: ["Infosys"],
+    HDFCBANK: ["HDFC Bank"],
+    ICICIBANK: ["ICICI Bank"],
+  }
+
+  for (const alias of knownCompanyNames[cleanTicker] || []) {
+    aliases.add(alias)
+  }
+
+  for (const token of query.split(/\s+/)) {
+    const cleaned = token.replace(/[^\w.&-]/g, "").trim()
+    if (cleaned.length >= 3) {
+      aliases.add(cleaned)
+    }
+  }
+
+  return [...aliases]
+}
+
+function normalizeArticleText(article: RawArticle): string {
+  return `${article.title} ${article.description} ${article.source}`.toLowerCase()
+}
+
+function scoreArticleRelevance(article: RawArticle, aliases: string[]): number {
+  const haystack = normalizeArticleText(article)
+  let score = 0
+
+  for (const alias of aliases) {
+    const needle = alias.toLowerCase()
+    if (!needle) continue
+    if (haystack.includes(needle)) {
+      score += needle.length <= 5 ? 3 : 5
+    }
+  }
+
+  const titleOnly = article.title.toLowerCase()
+  for (const alias of aliases) {
+    const needle = alias.toLowerCase()
+    if (titleOnly.includes(needle)) {
+      score += 4
+    }
+  }
+
+  return score
+}
+
+function filterRelevantArticles(rawArticles: RawArticle[], aliases: string[], strict: boolean): RawArticle[] {
+  const scored = rawArticles
+    .map((article) => ({ article, score: scoreArticleRelevance(article, aliases) }))
+    .filter(({ score }) => (strict ? score >= 4 : score >= 1))
+    .sort((a, b) => b.score - a.score)
+
+  return scored.map(({ article }) => article)
+}
+
+function mergeArticles(primary: RawArticle[], secondary: RawArticle[]): RawArticle[] {
+  const seen = new Set(primary.map((article) => article.url || article.title))
+  const merged = [...primary]
+
+  for (const article of secondary) {
+    const key = article.url || article.title
+    if (!seen.has(key)) {
+      seen.add(key)
+      merged.push(article)
+    }
+  }
+
+  return merged
 }
 
 function generateSummary(title: string, source: string): string {

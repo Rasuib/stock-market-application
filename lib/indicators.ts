@@ -168,7 +168,8 @@ export function computeRSI(prices: number[], period: number = 14): RSIResult | n
     }
   }
 
-  const rs = avgLoss === 0 ? 100 : avgGain / avgLoss
+  // If there are no losses in the lookback window, RSI should be 100.
+  const rs = avgLoss === 0 ? Number.POSITIVE_INFINITY : avgGain / avgLoss
   const rsi = 100 - (100 / (1 + rs))
 
   let signal: RSIResult["signal"] = "neutral"
@@ -205,7 +206,7 @@ export function rsiSeries(prices: number[], period: number = 14): (number | null
   avgGain /= period
   avgLoss /= period
 
-  const rs0 = avgLoss === 0 ? 100 : avgGain / avgLoss
+  const rs0 = avgLoss === 0 ? Number.POSITIVE_INFINITY : avgGain / avgLoss
   result.push(100 - (100 / (1 + rs0)))
 
   for (let i = period + 1; i < prices.length; i++) {
@@ -217,7 +218,7 @@ export function rsiSeries(prices: number[], period: number = 14): (number | null
       avgGain = (avgGain * (period - 1)) / period
       avgLoss = (avgLoss * (period - 1) + Math.abs(change)) / period
     }
-    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss
+    const rs = avgLoss === 0 ? Number.POSITIVE_INFINITY : avgGain / avgLoss
     result.push(100 - (100 / (1 + rs)))
   }
 
@@ -680,7 +681,8 @@ function computeConsensusSignal(
     strength = 1 - Math.abs(bullishPct - bearishPct) * 2
   }
 
-  const confidence = Math.min(1, totalWeight / 0.8) // Full confidence when >= 80% of indicators available
+  // Confidence reflects the actual weighted coverage of contributing indicators.
+  const confidence = Math.min(1, totalWeight)
 
   return { direction, strength, confidence, signals: votes }
 }

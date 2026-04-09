@@ -38,6 +38,7 @@ interface RealTimeStockChartProps {
   changePercent?: number
   currency?: string
   market?: string
+  marketState?: string
   onPriceUpdate?: (price: number, change: number, changePercent: number) => void
 }
 
@@ -49,6 +50,7 @@ export default function RealTimeStockChart({
   changePercent,
   currency,
   market,
+  marketState,
   onPriceUpdate,
 }: RealTimeStockChartProps) {
   const resolvedCurrency = currency || (market === "IN" ? "INR" : "USD")
@@ -69,36 +71,15 @@ export default function RealTimeStockChart({
   const [tickCount, setTickCount] = useState(0)
   const [showBollinger, setShowBollinger] = useState(false)
   const [showSMA, setShowSMA] = useState(false)
+  const [liveMarketState, setLiveMarketState] = useState(marketState || "UNKNOWN")
+  const [marketStatusLabel, setMarketStatusLabel] = useState("Market Status Unknown")
+  const [isMarketOpen, setIsMarketOpen] = useState(false)
+  const [isStale, setIsStale] = useState(false)
+  const chartDataRef = useRef<ChartDataPoint[]>([])
 
-  const fetchRealTimePrice = useCallback(async () => {
-    if (!symbol) return null
-
-    try {
-      const response = await fetch(`/api/stock/${symbol}?t=${Date.now()}`, {
-        cache: "no-store",
-        headers: {
-          "Cache-Control": "no-cache",
-        },
-      })
-
-      if (!response.ok) {
-        setFetchError(`Failed to fetch price (${response.status})`)
-        return null
-      }
-
-      setFetchError(null)
-      const data = await response.json()
-
-      return {
-        price: data.price,
-        change: data.change,
-        changePercent: data.changePercent,
-      }
-    } catch (error) {
-      setFetchError("Network error — retrying automatically")
-      return null
-    }
-  }, [symbol])
+  useEffect(() => {
+    chartDataRef.current = chartData
+  }, [chartData])
 
   const fetchChartData = useCallback(async () => {
     if (!symbol) return
@@ -108,34 +89,67 @@ export default function RealTimeStockChart({
 
     try {
       if (timeRange === "3S") {
-        const priceData = await fetchRealTimePrice()
+        const realtimeResponse = await fetch(`/api/stock/${symbol}/chart?range=3S&t=${Date.now()}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        })
 
-        if (priceData?.price) {
-          const now = Date.now()
-          const newDataPoint: ChartDataPoint = {
-            time: new Date(now).toLocaleTimeString("en-IN", {
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-              hour12: false,
-              timeZone: "Asia/Kolkata",
-            }),
-            price: priceData.price,
-            timestamp: now,
+        if (!realtimeResponse.ok) {
+          throw new Error(`Failed to fetch realtime chart (${realtimeResponse.status})`)
+        }
+
+        const realtimeData = await realtimeResponse.json()
+        const points = Array.isArray(realtimeData.chartData) ? (realtimeData.chartData as ChartDataPoint[]) : []
+        setLiveMarketState(realtimeData.marketState || marketState || "UNKNOWN")
+        setMarketStatusLabel(realtimeData.marketStatusLabel || "Market Status Unknown")
+        setIsMarketOpen(Boolean(realtimeData.isMarketOpen))
+        setIsStale(Boolean(realtimeData.isStale))
+
+        if (points.length > 0) {
+          const latestWindow = points.slice(-30)
+          const lastPoint = latestWindow[latestWindow.length - 1]
+          const prevPoint = latestWindow.length > 1 ? latestWindow[latestWindow.length - 2] : null
+          const tickChange = prevPoint ? lastPoint.price - prevPoint.price : 0
+          const tickChangePct = prevPoint && prevPoint.price > 0
+            ? (tickChange / prevPoint.price) * 100
+            : 0
+
+          setChartData(latestWindow)
+          setTickCount((prev) => (realtimeData.isMarketOpen ? prev + 1 : prev))
+          setLivePrice(lastPoint.price)
+          setLiveChange(tickChange)
+          setLiveChangePercent(tickChangePct)
+          onPriceUpdate?.(lastPoint.price, tickChange, tickChangePct)
+          setFetchError(null)
+        } else if (chartDataRef.current.length === 0) {
+          const seedResponse = await fetch(`/api/stock/${symbol}/chart?range=1D&t=${Date.now()}`, { cache: "no-store" })
+          if (!seedResponse.ok) {
+            throw new Error(`Failed to load chart seed (${seedResponse.status})`)
           }
-
-          setLivePrice(priceData.price)
-          setLiveChange(priceData.change)
-          setLiveChangePercent(priceData.changePercent)
-          setChartData((prevData) => [...prevData, newDataPoint].slice(-30))
-          setTickCount((prev) => prev + 1)
-          onPriceUpdate?.(priceData.price, priceData.change, priceData.changePercent)
+          const seedData = await seedResponse.json()
+          const seedPoints = Array.isArray(seedData.chartData) ? seedData.chartData as ChartDataPoint[] : []
+          if (seedPoints.length > 0) {
+            const seeded = seedPoints.slice(-30)
+            setChartData(seeded)
+            const lastPoint = seeded[seeded.length - 1]
+            if (lastPoint?.price) setLivePrice(lastPoint.price)
+            setFetchError("Live data is delayed. Showing the latest official intraday chart.")
+          } else {
+            setFetchError("No chart data returned for this symbol yet.")
+          }
         }
       } else {
         const chartResponse = await fetch(`/api/stock/${symbol}/chart?range=${timeRange}`)
+        if (!chartResponse.ok) {
+          throw new Error(`Failed to fetch chart (${chartResponse.status})`)
+        }
         const chartDataResponse = await chartResponse.json()
+        setLiveMarketState(chartDataResponse.marketState || marketState || "UNKNOWN")
+        setMarketStatusLabel(chartDataResponse.marketStatusLabel || "Market Status Unknown")
+        setIsMarketOpen(Boolean(chartDataResponse.isMarketOpen))
+        setIsStale(Boolean(chartDataResponse.isStale))
 
-        if (chartDataResponse.chartData) {
+        if (Array.isArray(chartDataResponse.chartData) && chartDataResponse.chartData.length > 0) {
           // Merge indicator series into chart data for overlays
           const series = chartDataResponse.indicatorSeries
           const merged = chartDataResponse.chartData.map((point: ChartDataPoint, i: number) => ({
@@ -151,17 +165,20 @@ export default function RealTimeStockChart({
           if (lastPoint) {
             setLivePrice(lastPoint.price)
           }
+          setFetchError(null)
+        } else {
+          setFetchError("No chart points available for this range.")
         }
       }
 
       setLastUpdate(new Date())
-    } catch (error) {
+    } catch {
       setFetchError("Failed to load chart data. Will retry on next interval.")
     } finally {
       setLoading(false)
       setIsRefreshing(false)
     }
-  }, [fetchRealTimePrice, onPriceUpdate, symbol, timeRange])
+  }, [marketState, onPriceUpdate, symbol, timeRange])
 
   useEffect(() => {
     if (startingPrice > 0) {
@@ -169,7 +186,10 @@ export default function RealTimeStockChart({
       setLiveChange(startingChange)
       setLiveChangePercent(startingChangePercent)
     }
-  }, [startingPrice, startingChange, startingChangePercent, symbol])
+    if (marketState) {
+      setLiveMarketState(marketState)
+    }
+  }, [startingPrice, startingChange, startingChangePercent, symbol, marketState])
 
   // Single effect for fetching + polling — avoids double-fire from two separate effects
   useEffect(() => {
@@ -192,7 +212,7 @@ export default function RealTimeStockChart({
 
     // Scale polling interval to time range — no need to hit the API every 2.5s for yearly data
     const pollIntervals: Record<string, number> = {
-      "3S": 3000,     // Live: 3 seconds
+      "3S": isMarketOpen ? 3000 : 30000,
       "1D": 30000,    // Intraday: 30 seconds
       "5D": 60000,    // 5-day: 1 minute
       "1M": 300000,   // Monthly: 5 minutes
@@ -212,7 +232,7 @@ export default function RealTimeStockChart({
         intervalRef.current = null
       }
     }
-  }, [fetchChartData, symbol, timeRange])
+  }, [fetchChartData, isMarketOpen, symbol, timeRange])
 
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp)
@@ -280,8 +300,8 @@ export default function RealTimeStockChart({
                 <RefreshCw className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`} />
                 {timeRange === "3S" ? (
                   <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 bg-success rounded-full animate-pulse" />
-                    LIVE (3s)
+                    <span className={`w-2 h-2 rounded-full ${isMarketOpen ? "bg-success animate-pulse" : "bg-warning"}`} />
+                    {isMarketOpen ? "LIVE (3s)" : "OFFICIAL CLOSE"}
                   </span>
                 ) : (
                   `Auto-refresh`
@@ -333,10 +353,26 @@ export default function RealTimeStockChart({
       </CardHeader>
 
       <CardContent className="space-y-4">
-        <div className="space-y-2 p-4 bg-surface rounded-lg border border-surface-border">
-          <div className="flex items-center justify-between">
+          <div className="space-y-2 p-4 bg-surface rounded-lg border border-surface-border">
+          <div className="flex items-center justify-between gap-4">
             <p className="text-sm text-muted-foreground">{symbol} Price</p>
-            {timeRange === "3S" && <span className="text-xs text-muted-foreground font-mono">Tick #{tickCount}</span>}
+            <div className="flex items-center gap-2">
+              <Badge
+                variant="outline"
+                className={
+                  isMarketOpen
+                    ? "border-profit/25 bg-profit/10 text-profit"
+                    : liveMarketState === "PRE" || liveMarketState === "PREPRE" || liveMarketState === "POST" || liveMarketState === "POSTPOST"
+                      ? "border-warning/25 bg-warning/10 text-warning"
+                      : "border-border bg-muted text-muted-foreground"
+                }
+              >
+                {marketStatusLabel}
+              </Badge>
+              {timeRange === "3S" && isMarketOpen && (
+                <span className="text-xs text-muted-foreground font-mono">Tick #{tickCount}</span>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-3xl font-bold font-mono">{formatPrice(livePrice)}</span>
@@ -350,13 +386,16 @@ export default function RealTimeStockChart({
             <span>
               Change: <span className={liveChange >= 0 ? "text-profit" : "text-loss"}>{formatPrice(liveChange)}</span>
             </span>
+            {!isMarketOpen && timeRange === "3S" && (
+              <span className="text-warning">No synthetic movement after the session closes.</span>
+            )}
           </div>
         </div>
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h3 className="font-medium">
-              {timeRange === "3S" ? "Real-Time Trading Chart" : `${timeRange} Historical Chart`}
+              {timeRange === "3S" ? (isMarketOpen ? "Live Market Monitor" : "Official Intraday Chart") : `${timeRange} Historical Chart`}
             </h3>
             <span className="text-xs text-muted-foreground">{chartData.length} data points</span>
           </div>
@@ -527,7 +566,7 @@ export default function RealTimeStockChart({
           <div className="flex items-center justify-between text-xs">
             <span className="text-muted-foreground flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${isRefreshing ? "bg-success animate-pulse" : "bg-muted-foreground"}`} />
-              {isRefreshing ? "Fetching latest data..." : "Connected"}
+              {isRefreshing ? "Fetching latest data..." : isStale ? "Showing latest official data" : "Connected"}
             </span>
             <p className="text-muted-foreground">
               Last updated:{" "}

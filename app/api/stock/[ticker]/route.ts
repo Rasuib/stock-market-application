@@ -1,5 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { normalizeYahooMarketState } from "@/lib/market-state"
 // Rate limiting handled by middleware
+
+export const dynamic = "force-dynamic"
+export const revalidate = 0
 
 interface StockResponse {
   symbol: string
@@ -8,6 +12,7 @@ interface StockResponse {
   changePercent: number
   currency: string
   marketState: string
+  marketStatusLabel: string
   exchangeName: string
   previousClose: number
   timestamp: number
@@ -124,12 +129,22 @@ async function fetchStockData(ticker: string): Promise<StockResponse> {
         continue
       }
 
+      const normalizedState = normalizeYahooMarketState(meta.marketState)
       let currentPrice = meta.regularMarketPrice
+
+      if (normalizedState === "after-hours" && typeof meta.postMarketPrice === "number") {
+        currentPrice = meta.postMarketPrice
+      } else if (normalizedState === "pre-market" && typeof meta.preMarketPrice === "number") {
+        currentPrice = meta.preMarketPrice
+      }
+
       if (quotes && quotes.close && quotes.close.length > 0) {
         // Get the last non-null close price
         for (let i = quotes.close.length - 1; i >= 0; i--) {
           if (quotes.close[i] !== null) {
-            currentPrice = quotes.close[i]
+            if (normalizedState === "open" || normalizedState === "unknown") {
+              currentPrice = quotes.close[i]
+            }
             break
           }
         }
@@ -146,6 +161,14 @@ async function fetchStockData(ticker: string): Promise<StockResponse> {
         changePercent: Math.round(changePercent * 100) / 100,
         currency: meta.currency || "USD",
         marketState: meta.marketState || "UNKNOWN",
+        marketStatusLabel:
+          normalizedState === "open"
+            ? "Market Open"
+            : normalizedState === "pre-market"
+              ? "Pre-market price"
+              : normalizedState === "after-hours"
+                ? "After-hours price"
+                : "Last official price",
         exchangeName: meta.exchangeName || "Unknown Exchange",
         previousClose: previousClose,
         timestamp: Date.now(),

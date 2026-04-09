@@ -2,8 +2,6 @@
 
 import { useState, useRef, useEffect, useMemo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Wallet, Sparkles, Clock } from "lucide-react"
 import { useAuth } from "@/contexts/auth-context"
@@ -211,6 +209,14 @@ export default function TradingSimulator() {
     setShowPreview(false)
 
     const { type, request } = pendingOrder
+    const requestedQuantity = request.quantity
+    const requestedSymbol = request.symbol
+    const currentState = useTradingStore.getState()
+    const latestBalance = currentState.balance
+    const latestTrades = currentState.trades
+    const latestPositions = currentState.positions
+    const latestPosition = latestPositions[requestedSymbol] ?? { quantity: 0, avgPrice: 0 }
+    const tradeCurrencySymbol = request.currency === "INR" ? "\u20B9" : "$"
     const config = getDefaultConfig()
     const adjustedConfig = {
       ...config,
@@ -235,38 +241,38 @@ export default function TradingSimulator() {
     }
 
     const fillPrice = result.fillPrice
-    const cost = quantity * fillPrice + (type === "buy" ? result.commissionPaid : -result.commissionPaid)
+    const cost = requestedQuantity * fillPrice + (type === "buy" ? result.commissionPaid : -result.commissionPaid)
     const now = new Date()
     const tradeTimestamp = now.toISOString()
     const displayTimestamp = now.toLocaleTimeString("en-US", { hour12: true, hour: "2-digit", minute: "2-digit", second: "2-digit" })
 
     if (type === "buy") {
-      if (cost > balance) {
+      if (cost > latestBalance) {
         addNotification({
           title: "Insufficient Balance",
-          message: `Order requires ${currencySymbol}${cost.toFixed(2)} (incl. fees) but you have ${currencySymbol}${balance.toLocaleString()}.`,
+          message: `Order requires ${tradeCurrencySymbol}${cost.toFixed(2)} (incl. fees) but you have ${tradeCurrencySymbol}${latestBalance.toLocaleString()}.`,
           timestamp: tradeTimestamp, type: "error", read: false, priority: "high",
         })
         setPendingOrder(null)
         return
       }
 
-      const newBalance = balance - cost
-      const totalQuantity = currentPosition.quantity + quantity
+      const newBalance = latestBalance - cost
+      const totalQuantity = latestPosition.quantity + requestedQuantity
       const newAvgPrice = totalQuantity > 0
-        ? (currentPosition.quantity * currentPosition.avgPrice + quantity * fillPrice) / totalQuantity
+        ? (latestPosition.quantity * latestPosition.avgPrice + requestedQuantity * fillPrice) / totalQuantity
         : fillPrice
 
-      setBalance(newBalance)
-      setPositions(prev => ({ ...prev, [currentSymbol]: { quantity: totalQuantity, avgPrice: newAvgPrice } }))
+      setBalance(() => newBalance)
+      setPositions(prev => ({ ...prev, [requestedSymbol]: { quantity: totalQuantity, avgPrice: newAvgPrice } }))
 
       const coaching = evaluateTradeForCoaching(buildInput("buy", now.getTime(), fillPrice))
 
       const newTrade: TradeWithCoaching = {
-        id: `${tradeTimestamp}-${currentSymbol}-buy`,
-        type: "buy", symbol: currentSymbol, quantity, price: fillPrice, cost,
+        id: `${tradeTimestamp}-${requestedSymbol}-buy`,
+        type: "buy", symbol: requestedSymbol, quantity: requestedQuantity, price: fillPrice, cost,
         timestamp: tradeTimestamp, displayTime: displayTimestamp,
-        market: tradeMarket, currency: tradeCurrency,
+        market: request.market, currency: request.currency,
         thesis: thesis.trim() || undefined,
         execution: {
           requestedPrice: result.requestedPrice,
@@ -280,7 +286,7 @@ export default function TradingSimulator() {
         coaching,
       }
 
-      const updatedTrades = [...trades, newTrade]
+      const updatedTrades = [...latestTrades, newTrade]
       setTrades(updatedTrades)
       setLastCoachingReport(newTrade)
       updateBehavioralMemory(newTrade, updatedTrades)
@@ -291,8 +297,8 @@ export default function TradingSimulator() {
       if (isAuthenticated) recordTrade(0, "buy", "technicalAnalysis")
 
       addNotification({
-        title: `Bought ${quantity} ${currentSymbol} @ ${currencySymbol}${fillPrice.toFixed(2)}`,
-        message: `${coaching.summary} (Commission: ${currencySymbol}${result.commissionPaid.toFixed(2)})`,
+        title: `Bought ${requestedQuantity} ${requestedSymbol} @ ${tradeCurrencySymbol}${fillPrice.toFixed(2)}`,
+        message: `${coaching.summary} (Commission: ${tradeCurrencySymbol}${result.commissionPaid.toFixed(2)})`,
         timestamp: tradeTimestamp, type: "trade_buy", read: false,
         priority: cost > 50000 ? "high" : cost > 10000 ? "medium" : "low",
       })
@@ -302,39 +308,39 @@ export default function TradingSimulator() {
 
     } else {
       // SELL
-      const owned = currentPosition.quantity
-      if (quantity > owned) {
+      const owned = latestPosition.quantity
+      if (requestedQuantity > owned) {
         addNotification({
           title: "Not Enough Shares",
-          message: `You own ${owned} share${owned !== 1 ? "s" : ""}, but tried to sell ${quantity}.`,
+          message: `You own ${owned} share${owned !== 1 ? "s" : ""}, but tried to sell ${requestedQuantity}.`,
           timestamp: tradeTimestamp, type: "error", read: false, priority: "high",
         })
         setPendingOrder(null)
         return
       }
 
-      const sellProceeds = quantity * fillPrice - result.commissionPaid
-      const newBalance = balance + sellProceeds
-      const remainingShares = owned - quantity
-      const profit = (fillPrice - currentPosition.avgPrice) * quantity - result.commissionPaid
-      const profitPercent = currentPosition.avgPrice > 0
-        ? ((fillPrice - currentPosition.avgPrice) / currentPosition.avgPrice) * 100
+      const sellProceeds = requestedQuantity * fillPrice - result.commissionPaid
+      const newBalance = latestBalance + sellProceeds
+      const remainingShares = owned - requestedQuantity
+      const profit = (fillPrice - latestPosition.avgPrice) * requestedQuantity - result.commissionPaid
+      const profitPercent = latestPosition.avgPrice > 0
+        ? ((fillPrice - latestPosition.avgPrice) / latestPosition.avgPrice) * 100
         : 0
 
-      setBalance(newBalance)
+      setBalance(() => newBalance)
       setPositions(prev => ({
         ...prev,
-        [currentSymbol]: { quantity: remainingShares, avgPrice: remainingShares > 0 ? currentPosition.avgPrice : 0 },
+        [requestedSymbol]: { quantity: remainingShares, avgPrice: remainingShares > 0 ? latestPosition.avgPrice : 0 },
       }))
 
       const coaching = evaluateTradeForCoaching(buildInput("sell", now.getTime(), fillPrice, profit, profitPercent))
 
-      const tradeId = `${tradeTimestamp}-${currentSymbol}-sell`
+      const tradeId = `${tradeTimestamp}-${requestedSymbol}-sell`
       const newTrade: TradeWithCoaching = {
         id: tradeId,
-        type: "sell", symbol: currentSymbol, quantity, price: fillPrice, cost: quantity * fillPrice,
+        type: "sell", symbol: requestedSymbol, quantity: requestedQuantity, price: fillPrice, cost: requestedQuantity * fillPrice,
         timestamp: tradeTimestamp, displayTime: displayTimestamp,
-        market: tradeMarket, currency: tradeCurrency,
+        market: request.market, currency: request.currency,
         profit, profitPercent,
         thesis: thesis.trim() || undefined,
         execution: {
@@ -349,7 +355,7 @@ export default function TradingSimulator() {
         coaching,
       }
 
-      const updatedTrades = [...trades, newTrade]
+      const updatedTrades = [...latestTrades, newTrade]
       setTrades(updatedTrades)
       setLastCoachingReport(newTrade)
       updateBehavioralMemory(newTrade, updatedTrades)
@@ -359,10 +365,10 @@ export default function TradingSimulator() {
 
       if (isAuthenticated) recordTrade(profit, "sell", "riskManagement")
 
-      const profitLabel = profit >= 0 ? `+${currencySymbol}${profit.toFixed(2)}` : `-${currencySymbol}${Math.abs(profit).toFixed(2)}`
+      const profitLabel = profit >= 0 ? `+${tradeCurrencySymbol}${profit.toFixed(2)}` : `-${tradeCurrencySymbol}${Math.abs(profit).toFixed(2)}`
       addNotification({
-        title: `Sold ${quantity} ${currentSymbol} (${profitLabel})`,
-        message: `${coaching.summary} (Commission: ${currencySymbol}${result.commissionPaid.toFixed(2)})`,
+        title: `Sold ${requestedQuantity} ${requestedSymbol} (${profitLabel})`,
+        message: `${coaching.summary} (Commission: ${tradeCurrencySymbol}${result.commissionPaid.toFixed(2)})`,
         timestamp: tradeTimestamp, type: "trade_sell", read: false,
         priority: cost > 50000 ? "high" : cost > 10000 ? "medium" : "low",
       })
@@ -404,7 +410,7 @@ export default function TradingSimulator() {
 
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className="border-surface-border bg-surface/75 shadow-[0_12px_40px_-28px_rgba(0,0,0,0.8)]">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Wallet className="w-4 h-4 text-primary" />
@@ -446,7 +452,7 @@ export default function TradingSimulator() {
               </div>
 
               {/* Balance & Position */}
-              <div className="p-3 bg-surface rounded-lg space-y-1.5" aria-live="polite">
+              <div className="p-3 bg-surface-elevated/70 border border-surface-border rounded-lg space-y-1.5" aria-live="polite">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-muted-foreground">Balance</span>
                   <span className="text-sm font-bold text-profit font-mono" aria-label={`Balance: ${currencySymbol}${balance.toLocaleString()}`}>
@@ -561,7 +567,7 @@ export default function TradingSimulator() {
 
       {/* AI-powered analysis */}
       {lastCoachingReport && (aiLoading || lastAIAnalysis) && (
-        <Card className="bg-linear-to-br from-primary/10 to-primary/5 border-primary/30 overflow-hidden" aria-live="polite">
+        <Card className="bg-linear-to-br from-primary/10 to-primary/5 border-primary/30 overflow-hidden shadow-[0_10px_40px_-24px_rgba(0,0,0,0.8)]" aria-live="polite">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm text-primary flex items-center gap-2">
               <Sparkles className="w-4 h-4" />

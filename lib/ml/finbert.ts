@@ -73,6 +73,9 @@ export async function classifySentimentBatch(texts: string[]): Promise<FinBERTBa
 
   try {
     results = await callHuggingFaceAPIBatch(truncated)
+    if (results.length !== truncated.length) {
+      throw new Error(`Unexpected FinBERT batch result length: expected ${truncated.length}, got ${results.length}`)
+    }
   } catch {
     // Full fallback to keyword heuristics
     results = truncated.map(t => keywordFallback(t))

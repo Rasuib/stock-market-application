@@ -74,6 +74,13 @@ export function useOnboardingAutoAdvance() {
   const trades = useTradingStore((s) => s.trades)
   const prevTradeCount = useRef(trades.length)
 
+  // If a user already has trades, onboarding should be considered done.
+  useEffect(() => {
+    if (trades.length > 0 && onboardingStatus !== "completed" && onboardingStatus !== "skipped") {
+      setOnboardingStatus("completed")
+    }
+  }, [trades.length, onboardingStatus, setOnboardingStatus])
+
   // Step 1 → Step 2: when a stock is selected
   useEffect(() => {
     if (onboardingStatus === "not_started" || onboardingStatus === "step1_search") {

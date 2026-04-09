@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { normalizeYahooMarketState } from "@/lib/market-state"
 // Rate limiting handled by middleware
 
 interface SearchResult {
@@ -197,7 +198,15 @@ async function fetchStockData(ticker: string) {
     throw new Error("Invalid stock data")
   }
 
-  const currentPrice = meta.regularMarketPrice || meta.previousClose
+  const normalizedState = normalizeYahooMarketState(meta.marketState)
+  let currentPrice = meta.regularMarketPrice || meta.previousClose
+
+  if (normalizedState === "after-hours" && typeof meta.postMarketPrice === "number") {
+    currentPrice = meta.postMarketPrice
+  } else if (normalizedState === "pre-market" && typeof meta.preMarketPrice === "number") {
+    currentPrice = meta.preMarketPrice
+  }
+
   const previousClose = meta.previousClose
   const change = currentPrice - previousClose
   const changePercent = previousClose > 0 ? (change / previousClose) * 100 : 0

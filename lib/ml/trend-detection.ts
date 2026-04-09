@@ -45,7 +45,7 @@ function priceChangePercent(current: number, reference: number): number {
 /**
  * Detect trend from historical price data.
  *
- * With 26+ data points, uses multi-indicator consensus (RSI, MACD, Bollinger,
+ * With 35+ data points, uses multi-indicator consensus (RSI, MACD, Bollinger,
  * Stochastic, SMA) for a robust signal. Falls back to dual-MA crossover
  * when data is insufficient for full indicator computation.
  */

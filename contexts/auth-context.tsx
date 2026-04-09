@@ -19,6 +19,16 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null)
 
+interface ProfileResponse {
+  user: {
+    id: string
+    name: string | null
+    email: string
+    bio: string | null
+    image: string | null
+  } | null
+}
+
 const defaultTradingStats: TradingStats = {
   totalTrades: 0,
   successfulTrades: 0,
@@ -37,22 +47,49 @@ const defaultTradingStats: TradingStats = {
  * game state, not sensitive auth data.
  */
 function AuthContextProvider({ children }: { children: ReactNode }) {
-  const { data: session, status } = useSession()
+  const { data: session, status, update: updateSession } = useSession()
   const [learningProgress, setLearningProgress] = useState<LearningProgress | null>(null)
+  const [profile, setProfile] = useState<ProfileResponse["user"] | null>(null)
 
   // Derive user from NextAuth session
   const user: User | null = session?.user
     ? {
         id: session.user.id ?? "",
-        name: session.user.name ?? "",
-        email: session.user.email ?? "",
-        avatar: session.user.image ?? undefined,
-        bio: undefined,
+        name: profile?.name ?? session.user.name ?? "",
+        email: profile?.email ?? session.user.email ?? "",
+        avatar: profile?.image ?? session.user.image ?? undefined,
+        bio: profile?.bio ?? undefined,
         createdAt: "",
       }
     : null
 
   const isAuthenticated = status === "authenticated" && !!user
+
+  useEffect(() => {
+    if (status !== "authenticated" || !session?.user?.id) {
+      queueMicrotask(() => {
+        setProfile(null)
+      })
+      return
+    }
+
+    let cancelled = false
+
+    fetch("/api/user/profile", { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: ProfileResponse | null) => {
+        if (!cancelled && data?.user) {
+          setProfile(data.user)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setProfile(null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [session?.user?.id, status])
 
   // Load learning progress from localStorage when session changes.
   // Wrapped in microtask to avoid synchronous setState-in-effect lint warning.
@@ -162,11 +199,14 @@ function AuthContextProvider({ children }: { children: ReactNode }) {
       const res = await fetch("/api/user/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: updates.name, bio: updates.bio }),
+        body: JSON.stringify({ name: updates.name, bio: updates.bio, avatar: updates.avatar }),
       })
       if (!res.ok) return
-      // Trigger session refresh so the sidebar picks up the new name
-      window.location.reload()
+      const data = await res.json()
+      if (data?.user) {
+        setProfile(data.user)
+      }
+      await updateSession()
     } catch {
       // silently fail
     }

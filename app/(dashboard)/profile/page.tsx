@@ -69,13 +69,18 @@ export default function ProfilePage() {
 
   const handleSave = async () => {
     setIsSaving(true)
-    await updateUser({ name: formData.name, bio: formData.bio })
+    await updateUser({ name: formData.name, bio: formData.bio, avatar: formData.avatar })
     setIsSaving(false)
   }
 
   const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
+      if (file.size > 1_500_000) {
+        window.alert("Image is too large. Please choose a file smaller than 1.5MB.")
+        e.target.value = ""
+        return
+      }
       const reader = new FileReader()
       reader.onloadend = () => {
         setFormData({ ...formData, avatar: reader.result as string })

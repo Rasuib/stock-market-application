@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { TrendingUp, TrendingDown } from "lucide-react"
@@ -39,6 +40,29 @@ export default function OrderForm({
   limitPriceValid,
   onPreview,
 }: OrderFormProps) {
+  const [quantityInput, setQuantityInput] = useState<string>(String(quantity))
+
+  useEffect(() => {
+    setQuantityInput(String(quantity))
+  }, [quantity])
+
+  const handleQuantityChange = (raw: string) => {
+    // Let users type naturally (including temporary empty state while editing).
+    setQuantityInput(raw)
+    if (raw.trim() === "") return
+    const parsed = Number.parseInt(raw, 10)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      onQuantityChange(parsed)
+    }
+  }
+
+  const commitQuantity = () => {
+    const parsed = Number.parseInt(quantityInput, 10)
+    const normalized = Number.isFinite(parsed) && parsed > 0 ? parsed : 1
+    setQuantityInput(String(normalized))
+    onQuantityChange(normalized)
+  }
+
   return (
     <div className="space-y-3">
       {/* Order type toggle */}
@@ -92,8 +116,10 @@ export default function OrderForm({
           id="trade-quantity"
           type="number"
           min="1"
-          value={quantity}
-          onChange={(e) => onQuantityChange(Number.parseInt(e.target.value) || 1)}
+          step="1"
+          value={quantityInput}
+          onChange={(e) => handleQuantityChange(e.target.value)}
+          onBlur={commitQuantity}
         />
         <p className="text-[10px] text-muted-foreground mt-1 font-mono">
           Est. total: {currencySymbol}{(quantity * currentPrice).toLocaleString(undefined, { maximumFractionDigits: 2 })}

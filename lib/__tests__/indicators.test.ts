@@ -139,6 +139,13 @@ describe("RSI", () => {
     expect(result!.value).toBeLessThanOrEqual(100)
   })
 
+  it("RSI reaches 100 when there are no losses", () => {
+    const prices = Array.from({ length: 30 }, (_, i) => 100 + i * 2)
+    const result = computeRSI(prices)
+    expect(result).not.toBeNull()
+    expect(result!.value).toBe(100)
+  })
+
   it("rsiSeries has correct length", () => {
     const prices = trendingUp(100, 30)
     const series = rsiSeries(prices)
@@ -378,6 +385,13 @@ describe("computeAllIndicators", () => {
     const result = computeAllIndicators(prices)
     expect(result.overallSignal.confidence).toBeGreaterThan(0)
     expect(result.overallSignal.confidence).toBeLessThanOrEqual(1)
+  })
+
+  it("confidence is reduced when MACD is unavailable", () => {
+    const prices = trendingUp(100, 30)
+    const result = computeAllIndicators(prices)
+    expect(result.macd).toBeNull()
+    expect(result.overallSignal.confidence).toBeCloseTo(0.7, 5)
   })
 
   it("signal votes list all contributing indicators", () => {
